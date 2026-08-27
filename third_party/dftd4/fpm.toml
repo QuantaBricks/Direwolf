@@ -1,0 +1,38 @@
+name = "dftd4"
+version = "4.2.0"
+license = "LGPL-3.0-or-later"
+maintainer = ["@awvwgk"]
+author = ["Eike Caldeweyher", "Sebastian Ehlert", "Stefan Grimme"]
+description = "Generally Applicable Atomic-Charge Dependent London Dispersion Correction"
+keywords = ["quantum-chemistry", "dispersion-correction"]
+copyright = "Copyright 2017-2021 E. Caldeweyher, S. Ehlert, S. Grimme"
+
+[build]
+link = ["lapack", "blas"]
+auto-tests = false
+
+[dependencies]
+mctc-lib.git = "https://github.com/grimme-lab/mctc-lib.git"
+mctc-lib.tag = "v0.5.1"
+multicharge.git = "https://github.com/grimme-lab/multicharge.git"
+multicharge.tag = "v0.5.0"
+
+[dev-dependencies]
+mstore.git = "https://github.com/grimme-lab/mstore.git"
+mstore.tag = "v0.3.0"
+
+[[test]]
+name = "tester"
+source-dir = "test/unit"
+
+[extra.fortitude.check]
+ignore = [
+  "C002",  # interface without implicit none
+  "C003",  # implicit none(external)
+]
+per-file-ignores."src/dftd4/compat.f90" = ["C092"]
+per-file-ignores."src/dftd4/api.f90" = ["C071", "C072"]
+per-file-ignores."src/dftd4/blas.F90" = ["C071"]
+per-file-ignores."src/dftd4/disp.f90" = ["C061"]  # https://github.com/PlasmaFAIR/fortitude/issues/695
+per-file-ignores."assets/examples/*/app/main.f90" = ["C061"]  # https://github.com/PlasmaFAIR/fortitude/issues/695
+line-length = 132

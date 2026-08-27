@@ -1,0 +1,12 @@
+&molecule
+ imult      = 1
+ icharge    = 0
+ functional = 'HF'
+ baselabel  = 'lanl2dz'
+ ecplabel   = 'lanl2dz'
+ verbose    = 1
+&end
+
+&atoms
+Pd          0.0000         0.0000         0.0000
+&end

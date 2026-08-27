@@ -1,0 +1,75 @@
+# Stray Fortran runtime scratch output (raw unit-6/unit-8-style dumps,
+# .CP/.CPC-named checkpoint scratch) that has ended up accidentally
+# git-committed from a repo-root test run before - not source, not
+# example data, never meant to be tracked.
+fort.*
+.CP
+.CPC
+
+# Prerequisites
+*.d
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+/Engine
+/build/
+
+# benchmark/accuracy keeps its Engine/Psi4 .out files on purpose (kept
+# as checked-in test evidence, not build byproducts)
+!/benchmark/accuracy/Engine/*.out
+!/benchmark/accuracy/Psi4/*.out
+
+# Third-party dependency chain: source is vendored (third_party/*), the
+# build OUTPUT is not - `make Engine` builds all of it automatically
+# from a clean clone (see Makefile's third-party build rules).
+/third_party/libcint/build/
+/third_party/toml-f/build/
+/third_party/mctc-lib/build/
+/third_party/simple-dftd3/build/
+/third_party/gcp/build/
+/third_party/dftd4/build/
+/third_party/multicharge/build/
+/third_party/libxc/build/
+/third_party/_install/
+/third_party/OpenBLAS/*.a
+/third_party/OpenBLAS/*.so*
+/lib/libcint.a
+/lib/libopenblas_pthread.a
+/lib/libcint_ecp.a
+referenceDir/
+
+# Benchmark reports (Engine-vs-Psi4 comparisons) - generated locally,
+# not tracked (numbers are machine/run-specific and go stale quickly).
+/report/
+
+# Session work summaries - local notes, not tracked.
+/SUMMARY.md
+
+# scripts/make_release.sh output - generated on demand, not tracked.
+/release/

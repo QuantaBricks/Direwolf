@@ -1,0 +1,11 @@
+&molecule
+ imult      = 7
+ icharge    = 3
+ functional = 'HF'
+ baselabel  = 'def2tzvp'
+ verbose    = 1
+&end
+&atoms
+Fe   0.0  0.0  0.0   lanl2dz   lanl2dz   ! ECP+matching valence basis on the metal only
+H   50.0  0.0  0.0
+&end

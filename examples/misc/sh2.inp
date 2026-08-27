@@ -1,0 +1,13 @@
+&molecule
+ imult      = 2
+ icharge    = -1
+ functional = 'PBE_PBE'
+ baselabel  = '6-31g'
+ verbose    = 1
+&end
+
+&atoms
+S            -2.13         -0.248          0.000
+H            -1.17         -0.248           0.00
+H            -2.45          0.657           0.00
+&end

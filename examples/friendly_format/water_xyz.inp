@@ -1,0 +1,6 @@
+&molecule
+ functional = 'PBE_PBE'
+ baselabel  = '6-31g'
+ verbose    = 1
+ xyzfile    = 'examples/friendly_format/water.xyz'
+&end

@@ -1,0 +1,20 @@
+input,functional,reference_hartree,reference_source,tolerance_hartree,notes
+water_pbe0.inp,PBE0,-76.3011085524414341,psi4,1e-6,
+water_blyp.inp,BLYP,-76.3648063640215184,psi4,1e-6,
+water_bp86.inp,BP86,-76.3851450025465795,psi4,1e-6,
+water_lda.inp,LDA,-76.0134411618707446,psi4 svwn,1e-6,LDA_C_VWN_RPA not LDA_C_VWN/VWN5
+water_camb3lyp.inp,CAM-B3LYP (DF/RI),-76.3556819885017006,psi4 (set puream true),1e-6,reference updated 2026-08-03: old -76.355606583 was Psi4 default Cartesian-aux; Engine defaults to spherical now (commit 2493143) and matches Psi4 puream=true to ~5e-7
+water_camb3lyp_exact.inp,CAM-B3LYP (exact K),-76.3555844385,psi4 scf_type pk,1e-6,
+water_tpss.inp,TPSS,-76.3882095839735200,psi4,1e-6,pyscf cross-check -76.38820939205318
+water_m06l.inp,M06-L,-76.3773264586606615,psi4,1e-5,diff is ~7.5e-6 not the ~7.5e-7 first reported in commit 7b0488c - corrected here (order-of-magnitude transcription slip, not a real change)
+water_mn15l.inp,MN15-L,-76.3003198936959137,psi4,5e-6,
+water_mn15.inp,MN15,-76.3020418020673930,psi4,5e-6,
+water_m062x.inp,M06-2X,-76.3489752858216804,psi4,3e-5,KNOWN unresolved Minnesota-family residual - see README
+water_m06.inp,M06,-76.3512850249167485,psi4,3e-5,KNOWN unresolved Minnesota-family residual - see README
+water_m052x.inp,M05-2X,-76.368603317,engine self (not independently cross-checked),0,same code path as M06-2X/M06 - not a real reference
+water_wb97xd.inp,wB97X-D,-76.3625469459542074,psi4 (electronic+dispersion combined),3e-5,KNOWN unresolved Minnesota-family-style residual in electronic part - see README
+water_pbe0_d3.inp,PBE0-D3,-76.30111300939376,psi4,1e-6,Grimme -D3 zero-damping; dispersion term alone verified to ~1e-9 Ha (isolated by diffing against plain PBE0)
+water_pbe0_d3bj.inp,PBE0-D3BJ,-76.30138547553199,psi4,1e-6,Grimme -D3 BJ-damping; dispersion term alone verified to ~1e-9 Ha (isolated by diffing against plain PBE0)
+water_b973c.inp,B97-3c,-76.397671282703,psi4,1e-4,"-3c composite (functional+def2-mTZVP+D3BJ+SRB, no gCP - third_party/gcp's own select-case routes b973c to SRB only). 6.2e-5 Ha vs psi4; also cross-checked vs real ORCA 6.1.0 (2.0e-4 Ha, ORCA's own systematic offset from psi4 on this family, not an Engine defect - see project memory)"
+water_r2scan3c.inp,r2SCAN-3c,-76.418331377062,psi4,1e-4,"-3c composite (r2SCAN+def2-mTZVPP+D4+damped gCP). 4.8e-5 Ha vs psi4; ORCA cross-check 6.3e-4 Ha (same systematic ORCA-vs-psi4 offset pattern as B97-3c)"
+water_wb97x3c.inp,wB97X-3c,-17.270942540919,psi4,1e-4,"-3c composite (WB97X-V functional with VV10 disabled - nlc=False, only found by reading psi4's own hyb_functionals.py source - + D4 + vDZP basis with built-in small-core ECPs, no gCP/SRB). Total energy magnitude (~-17 Ha, not ~-76 Ha) is correct/expected - verified bit-consistent with real ORCA's own -17.27 Ha result, not a bug. 2.3e-5 Ha vs psi4; ORCA cross-check 2.0e-4 Ha. vDZP has NO fluorine (upstream basis gap, not Engine's)"

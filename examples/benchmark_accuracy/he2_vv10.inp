@@ -1,0 +1,14 @@
+&molecule
+ imult      = 1
+ icharge    = 0
+ functional = 'VV10'
+ baselabel  = 'aug-cc-pVDZ'
+ verbose    = 1
+ J          = 'exact'
+ K          = 'exact'
+&end
+
+&atoms
+He          0.0000         0.0000        -2.0000
+He          0.0000         0.0000         2.0000
+&end
