@@ -391,15 +391,18 @@ src/starter/        run_engine.f90 (file-driven front end, see "Example"
 src/core/           MOL_info / GRID_info module state, basis-file lookup,
                     memory-budget prediction
 src/integrals/      sole boundary to the electron-integral backend (libcint) -
-                    src/integrals/core/ shared setup, exact/ conventional
-                    J/K, df/ RI-J/RI-K, cosx/ chain-of-spheres exchange,
-                    force/ and hessian/ analytic derivatives
-src/exchange/       thin wrapper: exact HF exchange build
-src/density_fitting/  thin wrapper: RI-J build
+                    mod_exchange.f90/mod_density_fitting.f90 (thin
+                    public wrappers for exact-K/RI-J) sit here directly;
+                    core/ shared setup, exact/ conventional J/K, df/
+                    RI-J/RI-K, cosx/ chain-of-spheres exchange, force/
+                    and hessian/ analytic derivatives
 src/localization/   orbital localization (Pipek-Mezey)
 src/dispersion/     empirical dispersion (-D2/-D3/-D3BJ/-D4, gCP/SRB)
-src/xc/             sole boundary to the XC functional backend (libxc)
-src/grid/           DFT grid generation + GTO evaluation
+src/xc/             sole boundary to the XC functional backend (libxc);
+                    also DFT grid generation + GTO evaluation
+                    (grid_gen.f90/gto_eval.f90/grid_dynamic.f90,
+                    Lebedev.F) - shared with src/integrals/cosx/ and
+                    src/force/, not XC-exclusive despite living here
 src/scf/            SCF loop + Roothaan-equation solver, CPHF
 src/force/          post-SCF force/gradient assembly
 src/guess/          SCF initial guess, checkpoint/restart

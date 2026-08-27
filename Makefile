@@ -49,7 +49,7 @@ LIBXCDIR   = third_party/libxc
 tagCOMP    = -c -free -O3 -fopenmp -I$(DATADIR) -I$(LIBXCDIR)/build -J$(BUILDDIR)
 tagCOMPF77 = -c -O3 -fopenmp -I$(DATADIR) -J$(BUILDDIR)
 
-VPATH = src/main:src/starter:src/starter/io:src/starter/io/namelist:src/starter/io/xyz:src/starter/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/exchange:src/density_fitting:src/localization:src/xc:src/dispersion:src/grid:src/scf:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
+VPATH = src/main:src/starter:src/starter/io:src/starter/io/namelist:src/starter/io/xyz:src/starter/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
 
 objects = $(BUILDDIR)/mod_data.o \
           $(BUILDDIR)/mod_profile.o \

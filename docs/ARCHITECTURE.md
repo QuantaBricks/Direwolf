@@ -101,23 +101,25 @@ src/integrals/  mod_integrals.f90            Module state + public interface onl
                                               share libcint access and module state with the
                                               rest of the integrals family.)
 
-src/exchange/   mod_exchange.f90    Public wrapper around mod_integrals_exchange (HF_exchange_frac,
+src/integrals/  mod_exchange.f90    Public wrapper around mod_integrals_exchange (HF_exchange_frac,
                                      exchange_build) — SCF/force code goes through this, not
-                                     mod_integrals directly.
-
-src/density_fitting/
+                                     mod_integrals directly. Sits directly under src/integrals/
+                                     (not its own subfolder) since it's a thin dispatch layer over
+                                     what's already there, not a distinct implementation.
                 mod_density_fitting.f90  Public wrapper: df_build_coulomb(nconts, Ptot, J),
-                                     dispatches into mod_integrals_df's STORE/DIRECT paths.
+                                     dispatches into mod_integrals_df's STORE/DIRECT paths. Same
+                                     reasoning as mod_exchange.f90 above.
 
 src/xc/         mod_xc.f90          THE SOLE LIBXC BOUNDARY — functional selection
                                      (xc_select_functional), libxc calls.
                 DFT.f90             DFT_calc: XC quadrature over the grid (uses mod_xc + the
-                                     grid/GTO data from src/grid).
-
-src/grid/       grid_gen.f90        Becke-weight grid construction (gridgen), with
-                                     distance-pruned (PAIR_CUTOFF) partitioning.
+                                     grid/GTO data below).
+                grid_gen.f90        Becke-weight grid construction (gridgen), with
+                                     distance-pruned (PAIR_CUTOFF) partitioning. Lives here
+                                     alongside its main consumer (DFT.f90), but is also called
+                                     from src/integrals/cosx/ and src/force/ — not XC-exclusive.
                 gto_eval.f90        Basis-function values/gradients on every grid point (GTOeval).
-                Lebedev.f            Lebedev angular quadrature tables (F77 source).
+                Lebedev.F            Lebedev angular quadrature tables (fixed-form source).
 
 src/guess/      guess.f90           Initial density guess (core Hamiltonian / SAD-style).
 
