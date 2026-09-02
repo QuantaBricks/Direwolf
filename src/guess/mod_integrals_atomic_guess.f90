@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Builds the atomic (SAD) initial density guess used to start SCF.
 

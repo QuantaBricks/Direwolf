@@ -1,4 +1,4 @@
-# Not needed to build/run Engine inside the image; keeping them out of the
+# Not needed to build/run Direwolf inside the image; keeping them out of the
 # build context is what actually matters for docker build speed (final
 # image size is controlled by the multi-stage COPY list in Dockerfile,
 # not by this file).

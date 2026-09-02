@@ -33,11 +33,9 @@ it) since it's what the script actually checks against.
 
 To re-verify after a code change, run each input and compare
 `total_energy_hartree` against the reference column below. Reference
-values were obtained via Psi4 (`scf_type pk`, `reference rks`, docker
-invocation - see `/home/xchen/.claude/projects/-home-xchen-Work-Engine/
-memory/reference_psi4_docker_invocation.md`) unless noted; PySCF
-(`dft.RKS`) was used as an independent cross-check for a few entries
-where noted.
+values were obtained via Psi4 (`scf_type pk`, `reference rks`) unless
+noted; PySCF (`dft.RKS`) was used as an independent cross-check for a
+few entries where noted.
 
 | Input | Functional | Reference energy (Ha) | Engine energy (Ha) | diff | Notes |
 |---|---|---|---|---|---|

@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Plain data carrier for a fully-parsed Engine input: everything a
 
@@ -46,6 +46,8 @@ type :: engine_input_t
    character(256) :: molden_file = ''
    logical        :: molden_read = .false.
    character(256) :: molden_read_file = ''
+
+   logical       :: resp_charges_on = .true.
 
    logical       :: cosmo_on = .false.
    real(8)       :: cosmo_epsilon = 78.4d0

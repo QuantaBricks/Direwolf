@@ -176,8 +176,7 @@ src/solvent/    mod_integrals_cosmo.f90  The one integral solvation needs: a tes
                                      mod_cosmo_solvents (named-solvent lookup, stateless) ->
                                      mod_cosmo_init (cosmo_init, once before SCF) ->
                                      mod_cosmo_scf (cosmo_scf_step per iteration,
-                                     cosmo_report_sigma_profile - see docs/
-                                     ADVANCED_FEATURES.md) -> mod_cosmo_force
+                                     cosmo_report_sigma_profile) -> mod_cosmo_force
                                      (post-SCF analytic gradient) -> cosmo.f90
                                      (mod_cosmo orchestrator, re-exports everything).
 ```

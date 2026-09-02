@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Assembles the total analytic energy gradient (force) from 1-electron and 2-electron integral derivatives.
 

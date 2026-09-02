@@ -231,6 +231,7 @@ None of these change results; they print or dump intermediates.
 | `ENGINE_DUMP_E1FIXED=1` | Dump the fixed one-electron energy terms. |
 | `ENGINE_DF_RAW=1` | Dump raw DF three-index quantities (converged runs only). |
 | `ENGINE_CCBK_RAW=1` | Dump raw CCBK quantities (converged runs only). |
+| `ENGINE_RESP_DUMP=<file>` | With `resp_charges_on`, write the RESP fit's Merz-Kollman grid to `<file>.grid` (Angstrom, one `x y z` per line) and the fitted ESP to `<file>.esp` (a.u., one value per line). For cross-code checks: comparing only the final charges cannot separate a grid-generator difference from a density difference from a fitting-algorithm difference, but feeding this dump to the other code's fitter can. |
 
 ---
 

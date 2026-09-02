@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! mod_cosmo_clip: GePol sequential multi-sphere clipping of one
 

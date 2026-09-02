@@ -1,21 +1,37 @@
-# Engine
+# Direwolf
 
 An independent quantum chemistry (QM) engine providing QM calculation
 results for other software, built for speed.
 
-Developer: Xin Chen (chenxin199261@gmail.com)
+Developer: Xin Chen
 
 **Status**: under active development since 2025 (AI-assisted); behavior
 and interfaces may still change between commits. See
 [docs/DEVLOG.md](docs/DEVLOG.md) for the project history and what's
 shipped vs. not started yet.
 
+## License
+
+Copyright © 2025-2026 QuantaBricks. Developed by Xin Chen.
+
+Direwolf is licensed under the **GNU Affero General Public License v3.0
+or later** (`AGPL-3.0-or-later`) - see [LICENSE](LICENSE). Note AGPL
+§13: running a modified version to provide a service over a network
+obliges you to offer that version's complete source to its users.
+
+For use that AGPL-3.0 does not permit - e.g. embedding Direwolf in a
+closed-source product or service - a separate commercial license is
+available from QuantaBricks.
+
+Bundled third-party dependencies keep their own licenses (table at the
+end of this file).
+
 ## Build
 
 ```
 make
 ```
-(requires gfortran, gcc, and cmake. Produces `./Engine` and
+(requires gfortran, gcc, and cmake. Produces `./Direwolf` and
 `lib/libengine.a`; `build/` holds `.o`/`.mod` files.)
 
 Every dependency - libcint, libxc, OpenBLAS/LAPACK, and the `-D3`/`-D3BJ`
@@ -31,54 +47,60 @@ and how it's linked.
 ## Run
 
 ```
-./Engine <input.inp> [output.out]
+./Direwolf <input.inp> [output.out]
 ```
 (output defaults to `<input.inp>.out` if omitted. Single-threaded unless
 `OMP_NUM_THREADS` is set in the environment or `n_threads` is set in the
 input file - see below.)
 
+## Docker
+
+```
+docker build -t engine .
+docker run --rm -v "$PWD":/data engine /data/input.inp /data/output.out
+```
+
+Multi-stage build: the first stage compiles Direwolf and every vendored
+`third_party/` dependency from source (same as a plain `make`); the
+final runtime image keeps only the `Direwolf` binary, `data/` (basis
+sets - resolved relative to Direwolf's own path, so it must ship
+alongside the binary), the 3 dynamically-linked LGPL `.so`s
+(simple-dftd3/gcp/dftd4), and the glibc/libgfortran/libgomp runtime
+libraries - about 130MB. `Dockerfile`/`.dockerignore` are tree-generic
+(no path is specific to this repo vs. an exported `release/Direwolf-<ver>/`
+tree - see [docs/RELEASE_EXPORT.md](docs/RELEASE_EXPORT.md)), so the
+same `Dockerfile` builds either one unmodified.
+
+Mount input and output under the **same** directory: Direwolf resolves
+the output path's basename in its own current working directory
+(`/app` inside the container), not the directory component of the path
+you passed - see `run_engine.f90`. Put both files under one `-v` mount
+(as in the example above) rather than under two different host
+directories, or the output will land in `/app` inside the container
+instead of where you expected.
+
 ## Supported functionals and methods
 
-Set via `functional` in `&molecule` (case-insensitive names below):
+Set via `functional` in `&molecule` (case-insensitive). Any unrecognized
+name falls back to plain PBE. See `docs/VALIDATION.md` for cross-code
+verification numbers.
 
-| `functional` | Type | Notes |
-|---|---|---|
-| `HF` | Hartree-Fock | plain HF, no XC functional |
-| `LDA` | LDA | Slater exchange + VWN-RPA correlation (matches Psi4's "SVWN") |
-| `BLYP` | GGA | |
-| `BP86` | GGA | |
-| `PBE_PBE` (or anything unrecognized) | GGA | PBE exchange + PBE correlation - the default fallback |
-| `PBE0` | hybrid GGA | PBE + 25% exact exchange |
-| `B3LYP` / `B3LYP_HYB` | hybrid GGA | |
-| `CAM-B3LYP` | range-separated hybrid GGA | |
-| `WB97X-D` / `WB97X_D` | range-separated hybrid GGA | includes its own Chai/Head-Gordon dispersion |
-| `WB97X` | range-separated hybrid GGA | bare (no dispersion, no VV10) - the original 2008 member of this family |
-| `TPSS` | meta-GGA | |
-| `R2SCAN` | meta-GGA | split X/C, 0% exact exchange |
-| `R2SCAN0` | hybrid meta-GGA | R2SCAN + 25% exact exchange, no range separation |
-| `M06L` / `M06-L` | meta-GGA | |
-| `M06` / `M06_HYB` | hybrid meta-GGA | |
-| `M06-2X` / `M06-2X_HYB` | hybrid meta-GGA | |
-| `M05-2X` | hybrid meta-GGA | |
-| `MN15L` / `MN15-L` | meta-GGA | |
-| `MN15` | hybrid meta-GGA | |
-| `VV10` | GGA + VV10 nonlocal correlation | rPW86 exchange + PBE correlation + VV10 |
-| `B97M-V` | meta-GGA + VV10 | Head-Gordon family, non-range-separated (0% exact exchange) |
-| `WB97X-V` | range-separated hybrid GGA + VV10 | Head-Gordon family, no tau (unlike WB97M-V below) |
-| `WB97M-V` | range-separated hybrid meta-GGA + VV10 | see `docs/ENVIRONMENT.md` for VV10 grid tuning |
-| `B97-3C` / `B97_3C` | GGA "-3c" composite | B97-3C + def2-mTZVP + D3(BJ) + SRB - see `docs/3C_METHODS.md` |
-| `R2SCAN-3C` / `R2SCAN_3C` | meta-GGA "-3c" composite | R2SCAN + def2-mTZVPP + D4 + gCP - see `docs/3C_METHODS.md` |
-| `WB97X-3C` / `WB97X_3C` | range-separated hybrid GGA "-3c" composite | WB97X-V + vDZP + D4 (no VV10, no F) - see `docs/3C_METHODS.md` |
+- **Hartree-Fock**: `HF`
+- **LDA**: `LDA` (Slater + VWN-RPA, = Psi4 "SVWN")
+- **GGA**: `BLYP`, `BP86`, `PBE`
+- **Hybrid GGA**: `PBE0`, `B3LYP`
+- **Range-separated hybrid**: `CAM-B3LYP`, `WB97X`, `WB97X-D`
+- **meta-GGA**: `TPSS`, `R2SCAN`, `M06-L`, `MN15-L`
+- **Hybrid meta-GGA**: `R2SCAN0`, `M06`, `M06-2X`, `M05-2X`, `MN15`
+- **VV10 nonlocal correlation**: `VV10`, `B97M-V`, `WB97X-V`, `WB97M-V`
+- **"-3c" composites** (basis + dispersion fixed by the method name, see
+  `docs/3C_METHODS.md`): `B97-3c`, `R2SCAN-3c`, `WB97X-3c`
 
-Empirical dispersion is added via a functional-name suffix, independent
-of the functional table above: append `-D2` (Grimme D2) or `-D3`/`-D3BJ`
-(Grimme D3, zero or Becke-Johnson damping) to any `functional` value,
-e.g. `functional = 'B3LYP-D3BJ'`. The three "-3c" composite methods
-above are the exception - their dispersion/gCP/basis are all fixed by
-the method name itself, not user-selectable (do not also add a `-D3BJ`
-suffix or set a different `baselabel` for these three).
+Append `-D2`, `-D3`, or `-D3BJ` to any name above for Grimme empirical
+dispersion, e.g. `functional = 'B3LYP-D3BJ'`. The "-3c" methods are the
+exception - their dispersion and basis are fixed, not user-selectable.
 
-Other methods, documented in their own sections below/elsewhere:
+Other methods, documented in their own sections below:
 - **Density fitting (RI-J/RI-K) and COSX**: `J`/`K`/`ri_aux_basis`, any functional above.
 - **ECP** (effective core potentials): see "ECP" section below.
 - **Implicit solvation** (COSMO/CPCM + SMD): see "Solvation" section below.
@@ -86,6 +108,7 @@ Other methods, documented in their own sections below/elsewhere:
 - **Analytic gradients**: `calc_force = .true.` (default), for every functional/method combination above.
 
 ## Input file format
+
 
 Fortran namelist; see `examples/friendly_format/`, `examples/drug_molecules/`,
 `examples/benchmark_accuracy/`, `examples/solvation/`, and `examples/misc/`
@@ -126,6 +149,9 @@ namelist terminator can be either `/` or `&end`.
               memory estimates below
  n_threads  = <integer>            [optional, default 0 = leave
               OMP_NUM_THREADS/the OpenMP default thread count alone]
+ resp_charges_on = .true./.false.  [optional, default .false.] compute
+              two-stage RESP (restrained ESP-fit) atomic charges after
+              the SCF converges - see "RESP charges" below
 &end
 &atoms
  O    0.000000    0.000000    0.000000
@@ -142,6 +168,7 @@ form (`atomchg`/`x`/`y`/`z` as comma-separated arrays, still
 backward-compatible) and an external `xyzfile`. It also documents the
 optional `&professional` namelist for advanced performance tuning - see
 docs/ENVIRONMENT.md.)
+
 
 ## ECP (effective core potential) and per-atom basis/ECP override
 
@@ -197,7 +224,7 @@ keyword (right column), case-insensitively - e.g. `'6-31G*'` and
 `'631gs'` are the same basis (translation table: `resolve_basis_name`,
 `engine.f90`).
 
-Engine supports both **spherical (puream) and Cartesian** Gaussians -
+Direwolf supports both **spherical (puream) and Cartesian** Gaussians -
 `spherical = .true. / .false.` in the `&molecule` namelist (default
 `.true.`). Spherical is what conventionally-spherical basis families
 (Dunning cc-pVxZ/aug-cc-pVxZ, Ahlrichs def2-*) actually mean by their
@@ -206,7 +233,7 @@ sets (6-31G*, 6-311G** etc.) are conventionally Cartesian either way, so
 `spherical` doesn't move their energy. Covers energy, analytic gradients,
 and f/g shells - see `docs/VALIDATION.md` for the verification numbers.
 Cartesian mode (`spherical = .false.`) is still available and is what
-Engine originally shipped with; it differs from the spherical/published
+Direwolf originally shipped with; it differs from the spherical/published
 number by ~0.01-0.5 mHartree for d-and-higher conventionally-spherical
 families, same magnitude either direction depending which one you're
 diffing against a Psi4 default run.
@@ -364,6 +391,102 @@ H          -0.7584         0.0000         0.5861
 CDS parameterization is per-solvent, unlike the electrostatic part
 which only needs a dielectric constant). See `examples/solvation/water_smd_toluene.inp`.
 
+## RESP charges
+
+On by default (`resp_charges_on = .true.`) for any converged run - the
+per-atom table in the output gains a third `RESP_q` column alongside
+Mulliken/Lowdin, no separate table. Set `resp_charges_on = .false.` in
+`&molecule` to skip the fit if you don't need it (see "Cost" below - it's
+now cheap enough that this is mainly about a tidier two-column table, not
+saved time). The implementation follows Psi4's RESP plugin
+([cdsgroup/resp](https://github.com/cdsgroup/resp), BSD-3, which is what
+Psi4 users actually run - Psi4 core itself ships no RESP) and through it
+[Bayly:93:10269], matching its defaults exactly:
+
+- Merz-Kollman grid, 4 shells at 1.4/1.6/1.8/2.0x VDW radius, 1.0 point
+  per Ų, **GAMESS** VDW radii (not Bondi), GAMESS latitude-band
+  unit-sphere sampling, and per-shell exclusion (a point on the 2.0x
+  shell is rejected against other atoms' 2.0x radii).
+- Stage 1: hyperbolic restraint `a=0.0005`, `b=0.1`, `IHFREE` (hydrogens
+  are not restrained), iterated to `toler=1e-5` from the unrestrained ESP
+  solution.
+- Stage 2: `a=0.001`, sp3 carbons carrying at least one hydrogen are
+  re-fit together with their own hydrogens (those hydrogens constrained
+  equal to each other); every other atom is pinned to its stage-1 charge.
+
+Verified on ibuprofen (33 atoms, B3LYP/def2-SVP) against Psi4 + the
+plugin at the same level of theory, separating the three things a
+final-charge comparison alone cannot tell apart (`ENGINE_RESP_DUMP`
+writes the grid and ESP out for exactly this):
+
+Both codes at `J='RI'`/`K='RI'` with `def2universaljkfit`, matching Psi4's
+`scf_type df` (which already defaults to def2-universal-JKFIT here -
+naming it explicitly changes Psi4's charges by exactly zero):
+
+| | difference |
+|---|---|
+| Grid: point count, and each point's position | 1328 = 1328, max 5e-9 Å |
+| Total SCF energy | 3.5e-5 Ha |
+| ESP at those grid points | RMS 3.3e-6 a.u., 2.1e-4 relative |
+| Fitting algorithm, both fitters run on Direwolf's own ESP | max 4.8e-7 e |
+| End to end, each code on its own density | RMS 4.5e-5 e, max 1.2e-4 e |
+
+Two independent checks say the residual is the SCF density and not the
+fit. Feeding Direwolf's ESP through Psi4's own fitter reproduces the
+end-to-end difference to every printed digit. And switching Direwolf from
+RIJCOSX to matched RI-JK shrinks the energy gap 16.9x (5.9e-4 → 3.5e-5
+Ha) and the charge gap 7.6x (9.1e-4 → 1.2e-4 e) together - the charges
+track the density, as they must. The 4.8e-7 e residual in the algorithm
+row is at the level the dump file's precision and the ESP fit's own
+conditioning can resolve. See `examples/drug_molecules/ibuprofen_resp.inp`.
+
+Repeated on three more drug molecules at the same matched RI-JK level, to
+check the ibuprofen number wasn't a lucky cancellation:
+
+| molecule | atoms | grid pts | max diff | RMS diff |
+|---|---|---|---|---|
+| paracetamol | 20 | 957 | 8.1e-5 e | 3.0e-5 e |
+| caffeine | 24 | 1108 | 1.5e-4 e | 6.0e-5 e |
+| fluoxetine | 40 | 1651 | 1.1e-4 e | 3.9e-5 e |
+| ibuprofen | 33 | 1328 | 1.2e-4 e | 4.5e-5 e |
+
+All four land in the same 1e-4 e band with no size trend, which is what
+"the residual is SCF-density noise" predicts and a real algorithmic bug
+would not.
+
+**Cost.** The ESP-at-a-grid-point kernel (`resp_grid_and_esp`) originally
+built a full nConts×nConts matrix per point purely to reduce it to one
+scalar - the same integral libcint's `cint1e_grids` (COSX already used
+it) evaluates for a whole block of points per call, with the shell-pair
+loop outside the point loop and nothing of size nConts² ever
+materialized. Same integrals, reordered: verified bit-identical against
+the original point-at-a-time path (`ENGINE_RESP_ESP_MODE=legacy` keeps it
+around as that reference) on both the ESP values (1e-12 a.u., the dump
+file's own precision) and the final charges (max diff 0.0e+00 e).
+
+| | `resp_grid_and_esp` before | after | speedup |
+|---|---|---|---|
+| ibuprofen, 33 atoms, 300 bf, 1328 pts | 2.76 s | 0.21 s | 13.1x |
+| imatinib, 68 atoms, 673 bf, 2539 pts | 33.61 s | 0.60 s | 56.2x |
+
+At 48 threads this puts the whole property at roughly 0.2-0.6 s even on a
+70-atom drug molecule - under 1% of a typical job's wall time, down from
+the ~12% it cost before this kernel existed. `resp_two_stage_fit` (the
+linear solves) stays negligible (≤0.03 s) regardless of system size, so
+`resp_charges_on = .false.` is now mostly useful for keeping the output
+table to two columns, not for saving time.
+
+(A separate idea - reusing the RI-J fitting coefficients the SCF already
+solved for, instead of the exact density, to skip the integral pass
+entirely - was tried and rejected: it needs a full RI-J re-solve anyway
+whenever incremental Fock leaves the cache pointing at a delta density
+(costing more than the exact path's entire ESP pass on a 68-atom test),
+and the small RI-J fitting error on the raw electronic ESP gets amplified
+~800x by the near-total cancellation between the nuclear and electronic
+terms in the total ESP - final charges came out 18x further from Psi4.
+See `esp_at_grid_batch_df` in `src/solvent/mod_integrals_cosmo.f90`,
+unreachable from `resp_charges_on` but kept rather than deleted.)
+
 ## Output file (`<input>.out`)
 
 ```
@@ -385,8 +508,8 @@ data/               basis set library + physical-constant INCLUDE file
 lib/                prebuilt third-party static libraries
 build/              object/.mod output (gitignored)
 src/main/           program entry point + EngineUp (library entry point)
-src/starter/        run_engine.f90 (file-driven front end, see "Example"
-                    below); src/starter/io/ parses &molecule/&atoms/&cosmo
+src/harness/        run_engine.f90 (file-driven front end, see "Example"
+                    below); src/harness/io/ parses &molecule/&atoms/&cosmo
                     (namelist/xyz/column &atoms formats, TOML export)
 src/core/           MOL_info / GRID_info module state, basis-file lookup,
                     memory-budget prediction

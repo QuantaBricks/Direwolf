@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Exact (non-fitted) 4-center Coulomb matrix build via direct ERI quartets.
 

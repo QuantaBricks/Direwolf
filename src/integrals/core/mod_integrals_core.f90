@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 submodule (mod_integrals) core_impl
 implicit none
@@ -849,6 +849,8 @@ module subroutine integrals_finalize()
        int2e_opt_lr = 0_8
     endif
     if (allocated(ao_shell)) deallocate(ao_shell)
+    if (allocated(basECP)) deallocate(basECP)
+    if (allocated(envECP)) deallocate(envECP)
     if (allocated(cPK_pq)) deallocate(cPK_pq,cPK_rs,cPK_val)
     coulomb_list_built = .false.
     cPK_n = 0

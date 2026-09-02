@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! COSX (chain-of-spheres) exchange matrix build: numerical-integration grid setup plus Fock exchange contraction.
 

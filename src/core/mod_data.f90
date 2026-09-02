@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! MOL_info (molecule/basis global state) and GRID_info (DFT quadrature grid global state) - Engine's two core shared-state modules.
 
@@ -49,6 +49,7 @@ real(8),allocatable  :: X(:,:)
 
 integer              :: Charge
 integer              :: Multi
+logical               :: resp_charges_on = .false.
 real(8)              :: E,E_rep
 
 integer              :: n_alpha
@@ -130,6 +131,9 @@ integer,parameter :: XCGRID_L5     = 5
 integer,parameter :: XCGRID_L6     = 6
 integer,parameter :: XCGRID_L7     = 7
 real(8) :: XCGRID_RSCALE(7)  = (/0.0d0, 0.60d0, 1.848d0, 0.845d0, 2.6d0, 1.30d0, 4.0d0/)
+integer :: XCGRID_M3_ANGGRID(7) = (/0, 3, 4, 5, 6, 7, 7/)
+real(8) :: XCGRID_M3_RSCALE(7)  = (/0.0d0, 0.65d0, 0.95d0, 1.55d0, 2.10d0, 2.70d0, 3.40d0/)
+integer :: XCGRID_M3_NRAD(7)    = (/45, 55, 60, 65, 70, 75, 80/)
 integer :: XCGRID_SPH_IN(7)  = (/0, 302, 302, 974, 974, 974, 974/)
 integer :: XCGRID_SPH_EDGE(7) = (/0, 302, 302, 590, 590, 590, 974/)
 integer :: xcgrid_level = XCGRID_FINE
@@ -170,6 +174,64 @@ integer,allocatable :: batch_atoms(:,:),batch_natom(:)
 integer,allocatable :: vxc_sh_atom(:),vxc_sh_local(:),vxc_sh_ao0(:),vxc_sh_ndim(:)
 
 contains
+
+integer function xcgrid_m3_row(Zin) result(row)
+implicit none
+integer, intent(in) :: Zin
+select case (max(1, Zin))
+case (:2);    row = 1
+case (3:10);  row = 2
+case (11:18); row = 3
+case (19:36); row = 4
+case (37:54); row = 5
+case (55:86); row = 6
+case default; row = 7
+end select
+end function xcgrid_m3_row
+
+real(8) function xcgrid_m3_xi(Zin) result(xi)
+implicit none
+integer, intent(in) :: Zin
+integer :: z
+real(8), parameter :: BR(103) = (/ &
+   0.35d0, 1.40d0, &
+   1.45d0, 1.05d0, 0.85d0, 0.70d0, 0.65d0, 0.60d0, 0.50d0, 1.50d0, &
+   1.80d0, 1.50d0, 1.25d0, 1.10d0, 1.00d0, 1.00d0, 1.00d0, 1.80d0, &
+   2.20d0, 1.80d0, &
+   1.60d0, 1.40d0, 1.35d0, 1.40d0, 1.40d0, 1.40d0, 1.35d0, 1.35d0, 1.35d0, 1.35d0, &
+   1.30d0, 1.25d0, 1.15d0, 1.15d0, 1.15d0, 1.90d0, &
+   2.35d0, 2.00d0, &
+   1.80d0, 1.55d0, 1.45d0, 1.45d0, 1.35d0, 1.30d0, 1.35d0, 1.40d0, 1.60d0, 1.55d0, &
+   1.55d0, 1.45d0, 1.45d0, 1.40d0, 1.40d0, 2.10d0, &
+   2.60d0, 2.15d0, &
+   1.95d0, 1.85d0, 1.85d0, 1.85d0, 1.85d0, 1.85d0, 1.85d0, &
+   1.80d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, &
+   1.55d0, 1.45d0, 1.35d0, 1.35d0, 1.30d0, 1.35d0, 1.35d0, 1.35d0, 1.50d0, &
+   1.90d0, 1.80d0, 1.60d0, 1.90d0, 1.45d0, 2.10d0, &
+   1.80d0, 2.15d0, &
+   1.95d0, 1.80d0, 1.80d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, &
+   1.75d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0, 1.75d0 /)
+real(8), parameter :: XCGRID_M3_KROW(7) = &
+   (/ 1.80d0, 1.40d0, 0.90d0, 0.75d0, 0.70d0, 0.65d0, 0.65d0 /)
+z = max(1, min(103, Zin))
+xi = XCGRID_M3_KROW(xcgrid_m3_row(z)) * BR(z) * 1.8897259886d0
+end function xcgrid_m3_xi
+
+subroutine xcgrid_m3_radial(Zin, i, nrad, radr, radw)
+implicit none
+integer, intent(in) :: Zin, i, nrad
+real(8), intent(out) :: radr, radw
+real(8) :: pig, ln2, theta, x, s, xi, drdx
+pig  = acos(-1.0d0)
+ln2  = log(2.0d0)
+xi   = xcgrid_m3_xi(Zin)
+theta = i * pig / (nrad + 1)
+x = cos(theta)
+s = sin(theta)
+radr = (xi/ln2) * log(2.0d0/(1.0d0 - x))
+drdx = (xi/ln2) / (1.0d0 - x)
+radw = 4.0d0*pig * (pig/(nrad+1)) * s * radr*radr * drdx
+end subroutine xcgrid_m3_radial
 
 integer function xcgrid_prune_sphpot(sphpot, i, nr_quarter) result(cursphpot)
 implicit none
@@ -216,6 +278,30 @@ else
    cursphpot = pat434(place)
 endif
 end function xcgrid_prune_sphpot_pyscf
+
+integer function xcgrid_prune_orca(anggrid, ratio, row) result(cursphpot)
+implicit none
+integer,intent(in) :: anggrid, row
+real(8),intent(in) :: ratio
+integer :: place, ag
+real(8) :: alphas(4)
+integer,parameter :: ORCA_ANG(5,7) = reshape((/ &
+    14,  26,  50,  50,  26,   &
+    14,  26,  50, 110,  50,   &
+    26,  50, 110, 194, 110,   &
+    26, 110, 194, 302, 194,   &
+    26, 194, 302, 434, 302,   &
+    50, 302, 434, 590, 434,   &
+   110, 434, 590, 770, 590 /), (/5,7/))
+select case (row)
+case (1); alphas = (/0.25d0,   0.5d0, 1.0d0, 4.5d0/)
+case (2); alphas = (/0.1667d0, 0.5d0, 0.9d0, 3.5d0/)
+case default; alphas = (/0.1d0, 0.4d0, 0.8d0, 2.5d0/)
+end select
+ag = max(1, min(7, anggrid))
+place = count(ratio .gt. alphas)
+cursphpot = ORCA_ANG(place+1, ag)
+end function xcgrid_prune_orca
 
 integer function xcgrid_fine_level_for_functional(functional) result(lvl)
 implicit none

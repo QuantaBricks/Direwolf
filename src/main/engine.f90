@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Top-level driver: EngineUp entry point wiring molecule/basis setup through SCF, force, and property evaluation.
 
@@ -9,13 +9,13 @@ subroutine EngineUp(ncenters,imult,icharge,functional_in,&
                     j_mode,k_mode,ri_aux_basis,puream,harris_guess,do_force,vv10_nonself,mem_cap_gb,&
                     estimate_only,n_threads,&
                     npc,pc_charge,pc_coord,&
-                    chk_read,chk_write,chk_file,&
                     molden_write,molden_file,molden_read,molden_read_file,&
                     cosmo_on,cosmo_epsilon,cosmo_radii_scale,cosmo_avg_area,cosmo_sigma_rav,&
                     cosmo_cavity_type,cosmo_rsolv,cosmo_ks_nseg,cosmo_ks_nface,cosmo_sigma_profile_file,&
                     cosmo_smd,cosmo_solvent,&
                     force_out,energy_out,MLcharge_out,iconv,econv,&
-                    mem_grid_gb,mem_2e_gb,scf_conv_level,basedir)
+                    mem_grid_gb,mem_2e_gb,scf_conv_level,basedir,&
+                    dens_in_a,dens_in_b,dens_out_a,dens_out_b)
 
 use MOL_info
 use GRID_info, only: Grids
@@ -27,7 +27,8 @@ use GRID_info, only: xcgrid_dynamic, xcgrid_refined, xcgrid_level, &
                      xc_direct_mode, XC_DIRECT_NCONTS, force_dense, force_dense_mgga, &
                      xcgrid_fine_level_for_functional, &
                      grid_cache_mode, max_batch_nsig, grid_cache_capacity, ngrids
-use mod_integrals, only: integrals_init, engine_use_df, engine_use_df_j, engine_use_df_k, &
+use mod_integrals, only: resp_charges, &
+                          integrals_init, engine_use_df, engine_use_df_j, engine_use_df_k, &
                           engine_df_aux_basis, &
                           engine_estimate_only, integrals_estimate_aux_size, &
                           nRec, nContsAux, decide_df_force_mode, engine_puream, &
@@ -43,10 +44,10 @@ use mod_dispersion_d3, only: dispersion_d3
 use mod_dispersion_d4, only: dispersion_d4
 use mod_gcp, only: gcp_correction
 use mod_profile, only: prof_reset, prof_start, prof_stop, prof_report, fmt_gb
-use mod_checkpoint, only: checkpoint_write, checkpoint_try_read
 use mod_molden, only: write_molden, read_molden
 use mod_cosmo, only: cosmo_enabled, cosmo_init, cosmo_report_sigma_profile, cosmo_finalize, &
-                      cosmo_solvent_epsilon, cosmo_solvent_smd_params, cosmo_set_sigma_profile_debug
+                      cosmo_solvent_epsilon, cosmo_solvent_smd_params, cosmo_set_sigma_profile_debug, &
+                      cosmo_write_dot_cosmo_file
 use mod_smd_cds, only: smd_cds_energy_force
 use omp_lib, only: omp_set_num_threads, omp_get_max_threads, omp_get_num_procs
 implicit none
@@ -81,8 +82,6 @@ logical,intent(in) :: estimate_only
 integer,intent(in) :: n_threads
 integer,intent(in) :: npc
 real(8),intent(in) :: pc_charge(npc),pc_coord(npc,3)
-logical,intent(in) :: chk_read,chk_write
-character(len=*),intent(in) :: chk_file
 logical,intent(in) :: molden_write, molden_read
 character(len=*),intent(in) :: molden_file, molden_read_file
 logical,intent(in) :: cosmo_on
@@ -101,6 +100,8 @@ real(8),intent(out) :: mem_grid_gb
 real(8),intent(out) :: mem_2e_gb
 integer,intent(in) :: scf_conv_level
 character(len=*),intent(in) :: basedir
+real(8),intent(in) :: dens_in_a(:,:), dens_in_b(:,:)
+real(8),intent(out),allocatable :: dens_out_a(:,:), dens_out_b(:,:)
 real(8)    :: Emax,Erms,Pmax,Prms
 integer    :: itmax
 
@@ -114,6 +115,7 @@ character(8) :: disp_d3_damping
 character(20) :: disp_d4_method
 character(len=20) :: gcp_method
 logical :: chk_ok
+logical :: has_warm_start
 
 real(8)   :: dist
 
@@ -125,7 +127,7 @@ if (n_threads .gt. 0) call omp_set_num_threads(n_threads)
 call openblas_set_num_threads(1)
 
 print *,"System cores available:",omp_get_num_procs(), &
-        " Engine OpenMP threads in use:",omp_get_max_threads()
+        " Direwolf OpenMP threads in use:",omp_get_max_threads()
 call flush(6)
 
 call reset_engine_state()
@@ -397,11 +399,11 @@ if (HF_exchange_frac .lt. 1.0d0) then
               integer :: reqlvl
               read(dyngridenv,*) reqlvl
               select case (reqlvl)
-              case (2,3) ; xcgrid_active_coarse = XCGRID_COARSE; xcgrid_active_fine = XCGRID_FINE
-              case (4,5) ; xcgrid_active_coarse = XCGRID_L4;     xcgrid_active_fine = XCGRID_L5
-              case (6,7) ; xcgrid_active_coarse = XCGRID_L6;     xcgrid_active_fine = XCGRID_L7
+              case (2:7)
+                 xcgrid_active_fine   = reqlvl
+                 xcgrid_active_coarse = max(XCGRID_COARSE, reqlvl - 1)
               case default
-                 print *,"ENGINE_XC_GRID_LEVEL: must be 2-7 (a coarse/fine pair member), ignoring"
+                 print *,"ENGINE_XC_GRID_LEVEL: must be 2-7, ignoring"
               end select
             end block
             print *,"ENGINE_XC_GRID_LEVEL override: active pair = (", &
@@ -444,10 +446,11 @@ if (HF_exchange_frac .lt. 1.0d0) then
          if (len_trim(dyngridenv) .gt. 0) then
             xcgrid_dynamic = (trim(dyngridenv) .eq. "1")
          else
-            xcgrid_dynamic = .true.
+            xcgrid_dynamic = (nconts .gt. XC_DIRECT_NCONTS)
          endif
+         has_warm_start = (size(dens_in_a,1) .gt. 0) .or. molden_read
          xcgrid_refined = .false.
-         if (xcgrid_dynamic .and. .not. chk_read) then
+         if (xcgrid_dynamic .and. .not. has_warm_start) then
             xcgrid_level = xcgrid_active_coarse
             call get_environment_variable("ENGINE_XC_DYNGRID_RSCALE", dyngridenv)
             if (len_trim(dyngridenv) .gt. 0) read(dyngridenv,*) XCGRID_RSCALE(xcgrid_active_coarse)
@@ -502,10 +505,10 @@ if (HF_exchange_frac .lt. 1.0d0) then
             if (vv10_dynamic) print *,"VV10 delayed self-consistent switch by default: nconts=",nconts, &
                  " >",VV10_DYNGRID_NCONTS," (override with ENGINE_VV10_DYNGRID=0)"
          endif
-         vv10_active_now = (.not. vv10_dynamic) .or. chk_read
+         vv10_active_now = (.not. vv10_dynamic) .or. has_warm_start
          vv10_just_activated = .false.
          vv10_flush_on_switch = .true.
-         if (vv10_dynamic .and. .not. chk_read) then
+         if (vv10_dynamic .and. .not. has_warm_start) then
             call get_environment_variable("ENGINE_VV10_DYNGRID_PRMS", dyngridenv)
             if (len_trim(dyngridenv) .gt. 0) read(dyngridenv,*) vv10_switch_prms
             call get_environment_variable("ENGINE_VV10_DYNGRID_NOFLUSH", dyngridenv)
@@ -616,7 +619,15 @@ print *, '[SCF]'
 Gtype = 3
 allocate(Pa_chk(nConts,nConts),Pb_chk(nConts,nConts))
 chk_ok = .false.
-if (chk_read) call checkpoint_try_read(chk_file, Pa_chk, Pb_chk, chk_ok)
+if (size(dens_in_a,1) .eq. nConts .and. size(dens_in_a,2) .eq. nConts .and. &
+    size(dens_in_b,1) .eq. nConts .and. size(dens_in_b,2) .eq. nConts) then
+   Pa_chk = dens_in_a
+   Pb_chk = dens_in_b
+   chk_ok = .true.
+else if (size(dens_in_a,1) .gt. 0) then
+   print *,"dens_in_a/dens_in_b shape mismatch with current basis (need ",nConts,"x",nConts, &
+           "), falling back to molden_read/SAD"
+endif
 if (.not. chk_ok .and. molden_read) call read_molden(molden_read_file, Pa_chk, Pb_chk, chk_ok)
 if (chk_ok) Gtype = 4
 call guess(info,Gtype,Pa_chk,Pb_chk)
@@ -638,7 +649,9 @@ call prof_start("scf_total")
 call SCFcycle(info,Emax,Pmax,itmax,iconv,econv,do_force)
 call prof_stop("scf_total")
 
-if (chk_write .and. iconv .eq. 1) call checkpoint_write(chk_file)
+allocate(dens_out_a(nConts,nConts), dens_out_b(nConts,nConts))
+dens_out_a = Pa
+dens_out_b = Pb
 if (molden_write .and. iconv .eq. 1) call write_molden(molden_file)
 
 block
@@ -771,8 +784,28 @@ if (do_force) then
    print *
 endif
 
-if (iconv .eq. 1) call calc_properties(Natoms, MLcharge_out)
+if (iconv .eq. 1) then
+   if (resp_charges_on) then
+      block
+      real(8) :: RESPcharge_out(Natoms)
+      call resp_charges(Natoms, RESPcharge_out)
+      call calc_properties(Natoms, MLcharge_out, RESPcharge_out)
+      end block
+   else
+      call calc_properties(Natoms, MLcharge_out)
+   endif
+endif
 if (iconv .eq. 1 .and. cosmo_enabled) call cosmo_report_sigma_profile(cosmo_sigma_rav, cosmo_sigma_profile_file)
+if (iconv .eq. 1 .and. cosmo_enabled) then
+   block
+   real(8) :: coor_ang_cosmors(3,Natoms)
+   integer :: ia_cosmors
+   do ia_cosmors = 1,Natoms
+      coor_ang_cosmors(:,ia_cosmors) = atoms(ia_cosmors)%coor
+   enddo
+   call cosmo_write_dot_cosmo_file(Natoms, coor_ang_cosmors, trim(Functional), trim(baselable), E)
+   end block
+endif
 
 if (disp_s6 .gt. 0.0d0) then
    block
@@ -910,9 +943,7 @@ if (allocated(eLev_b))  deallocate(eLev_b)
 if (allocated(X))       deallocate(X)
 if (allocated(linkMat)) deallocate(linkMat)
 if (allocated(Grids))   deallocate(Grids)
-if (allocated(val_blocks)) deallocate(val_blocks)
-if (allocated(TempD_all)) deallocate(TempD_all)
-if (allocated(rcut2_shared)) deallocate(rcut2_shared)
+call xcgrid_free_derived()
 if (allocated(pointcharge_q)) deallocate(pointcharge_q)
 if (allocated(pointcharge_coor)) deallocate(pointcharge_coor)
 grid_cache_capacity = 0

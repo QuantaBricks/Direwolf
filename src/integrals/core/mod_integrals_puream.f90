@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! libcint-backed 1-electron integral wrappers (overlap/kinetic/nuclear) plus spherical-harmonic (puream) transform helpers.
 

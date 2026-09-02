@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Post-SCF property evaluation (population analysis, dipole, orbital printing).
 
@@ -7,12 +7,13 @@ submodule (mod_integrals) properties_impl
 implicit none
 contains
 
-module subroutine calc_properties(Natoms_in, MLcharge_out)
+module subroutine calc_properties(Natoms_in, MLcharge_out, RESPcharge_in)
 use MOL_info
 implicit none
 INCLUDE 'parameter.h'
 integer,intent(in) :: Natoms_in
 real(8),intent(out) :: MLcharge_out(Natoms_in)
+real(8),intent(in),optional :: RESPcharge_in(Natoms_in)
 
 integer,allocatable :: ao_offset(:), atom_ao_off(:)
 real(8),allocatable :: Rx(:,:), Ry(:,:), Rz(:,:)
@@ -120,10 +121,17 @@ print '(" Dipole moment (a.u.):   X=",F10.5,"  Y=",F10.5,"  Z=",F10.5,"  |mu|=",
 print '(" Dipole moment (Debye):  X=",F10.5,"  Y=",F10.5,"  Z=",F10.5,"  |mu|=",F10.5)', &
       dip_au(1)*AU2DEBYE,dip_au(2)*AU2DEBYE,dip_au(3)*AU2DEBYE,dip_debye_norm
 print *
-print *,"  Atom     Z    Mulliken_q      Lowdin_q"
-do ia = 1,Natoms_in
-   print '(I5,I8,2F14.6)', ia, atoms(ia)%charge, MLcharge_out(ia), q_lowdin(ia)
-enddo
+if (present(RESPcharge_in)) then
+   print '(A6,A5,3A12)', 'Atom','Z','Mulliken_q','Lowdin_q','RESP_q'
+   do ia = 1,Natoms_in
+      print '(I6,I5,3F12.6)', ia, atoms(ia)%charge, MLcharge_out(ia), q_lowdin(ia), RESPcharge_in(ia)
+   enddo
+else
+   print '(A6,A5,2A12)', 'Atom','Z','Mulliken_q','Lowdin_q'
+   do ia = 1,Natoms_in
+      print '(I6,I5,2F12.6)', ia, atoms(ia)%charge, MLcharge_out(ia), q_lowdin(ia)
+   enddo
+endif
 deallocate(q_lowdin)
 print *
 print *,"  Orbital energies (Hartree):"

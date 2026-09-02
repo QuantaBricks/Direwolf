@@ -1,5 +1,5 @@
 # Copyright (c) 2026 QuantaBricks
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 # Checked at Makefile-parse time (not as a recipe/prerequisite) so it's
 # immune to `make -j` scheduling and always fails fast, before wasting
@@ -49,7 +49,7 @@ LIBXCDIR   = third_party/libxc
 tagCOMP    = -c -free -O3 -fopenmp -I$(DATADIR) -I$(LIBXCDIR)/build -J$(BUILDDIR)
 tagCOMPF77 = -c -O3 -fopenmp -I$(DATADIR) -J$(BUILDDIR)
 
-VPATH = src/main:src/starter:src/starter/io:src/starter/io/namelist:src/starter/io/xyz:src/starter/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
+VPATH = src/main:src/harness:src/harness/io:src/harness/io/namelist:src/harness/io/xyz:src/harness/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
 
 objects = $(BUILDDIR)/mod_data.o \
           $(BUILDDIR)/mod_profile.o \
@@ -63,6 +63,7 @@ objects = $(BUILDDIR)/mod_data.o \
           $(BUILDDIR)/mod_integrals_atomic_guess.o \
           $(BUILDDIR)/mod_integrals_puream.o \
           $(BUILDDIR)/properties.o \
+          $(BUILDDIR)/resp.o \
           $(BUILDDIR)/mod_integrals_coulomb.o \
           $(BUILDDIR)/mod_integrals_exchange.o \
           $(BUILDDIR)/mod_integrals_exchange_cosx.o \
@@ -128,7 +129,7 @@ objects = $(BUILDDIR)/mod_data.o \
           $(BUILDDIR)/force.o \
           $(BUILDDIR)/engine.o
 
-# File-driven-frontend-only IO (src/starter/io): namelist/&atoms-file parsing
+# File-driven-frontend-only IO (src/harness/io): namelist/&atoms-file parsing
 # for the example/regression driver(s) below (run_engine, and any
 # future run_opt/run_bomd). Deliberately NOT part of $(objects)/
 # libengine.a - that archive is the in-process integration API
@@ -141,10 +142,11 @@ io_objects = $(BUILDDIR)/mod_engine_input_types.o \
              $(BUILDDIR)/mod_engine_input_atoms_namelist.o \
              $(BUILDDIR)/mod_engine_input_atoms_xyz.o \
              $(BUILDDIR)/mod_engine_input_atoms_column.o \
-             $(BUILDDIR)/mod_engine_input.o
+             $(BUILDDIR)/mod_engine_input.o \
+             $(BUILDDIR)/mod_engineup_interface.o
 
 
-all: Engine
+all: Direwolf
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
@@ -204,8 +206,18 @@ $(BUILDDIR)/%.o: %.F | $(BUILDDIR)
 $(LIBCINTDIR)/build/libcint.a:
 	cd $(LIBCINTDIR) && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=0 && cmake --build build -j$(NPROC)
 
+# Explicit target list (libs netlib re_lapack shared), NOT plain `make`
+# (OpenBLAS's own default `all` target is `libs netlib $(RELA) tests
+# shared`) - `tests` builds and RUNS OpenBLAS's entire own BLAS/LAPACK
+# test/ctest/utest suite every time this .a doesn't exist yet (a real
+# release-tree export, a fresh clone, `make clean`'s target...), which
+# is minutes of extra work for a suite that's OpenBLAS's own upstream
+# correctness check, not something Engine's build needs to re-verify.
+# re_lapack (RELA, expands to that when NO_LAPACK isn't set, which we
+# never set) is kept - it's actual LAPACK coverage this .a needs, not a
+# test.
 $(OPENBLASDIR)/libopenblas.a:
-	$(MAKE) -C $(OPENBLASDIR) USE_THREAD=1 USE_OPENMP=0 NO_SHARED=1 -j$(NPROC)
+	$(MAKE) -C $(OPENBLASDIR) USE_THREAD=1 USE_OPENMP=0 NO_SHARED=1 -j$(NPROC) libs netlib re_lapack shared
 
 # -DBUILD_TESTING=OFF skips libxc's own testsuite/ subdirectory (the
 # xc-regression/xc-consistency/xc-threshold/xc-info/xc-get_data
@@ -318,6 +330,7 @@ $(BUILDDIR)/mod_integrals_core.o     : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/m
 $(BUILDDIR)/mod_integrals_atomic_guess.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/mod_integrals_puream.o : $(BUILDDIR)/mod_integrals.o
 $(BUILDDIR)/properties.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o
+$(BUILDDIR)/resp.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_profile.o
 $(BUILDDIR)/mod_integrals_coulomb.o  : $(BUILDDIR)/mod_integrals.o
 $(BUILDDIR)/mod_integrals_exchange.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o
 $(BUILDDIR)/mod_integrals_exchange_cosx.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/gto_eval.o $(BUILDDIR)/grid_gen.o
@@ -361,7 +374,8 @@ $(BUILDDIR)/mod_smd_cds.o     : $(BUILDDIR)/mod_smd_tables.o $(BUILDDIR)/mod_smd
 $(BUILDDIR)/mod_cosmo_solvents.o : $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/mod_cosmo_init.o  : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_cosmo_cavity.o $(BUILDDIR)/mod_cosmo_state.o \
                                  $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_meminfo.o
-$(BUILDDIR)/mod_cosmo_scf.o   : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_cosmo_cavity.o $(BUILDDIR)/mod_cosmo_state.o
+$(BUILDDIR)/mod_cosmo_scf.o   : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_cosmo_cavity.o $(BUILDDIR)/mod_cosmo_state.o \
+                                 $(BUILDDIR)/mod_cosmo_radii.o $(BUILDDIR)/mod_engine_input_elements.o
 $(BUILDDIR)/mod_cosmo_force.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_cosmo_cavity.o $(BUILDDIR)/mod_cosmo_state.o
 $(BUILDDIR)/cosmo.o : $(BUILDDIR)/mod_cosmo_state.o $(BUILDDIR)/mod_cosmo_init.o $(BUILDDIR)/mod_cosmo_scf.o \
                        $(BUILDDIR)/mod_cosmo_force.o $(BUILDDIR)/mod_cosmo_solvents.o
@@ -413,15 +427,22 @@ $(BUILDDIR)/mod_engine_input.o: mod_engine_input.f90 $(BUILDDIR)/mod_engine_inpu
 	$(FORT90) $(tagCOMP) $< -o $@
 
 $(BUILDDIR)/run_engine.o: run_engine.f90 $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_scf_history.o $(BUILDDIR)/mod_version.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/cosmo.o \
-                          $(BUILDDIR)/mod_engine_input.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engine_input_block.o | $(BUILDDIR)
+                          $(BUILDDIR)/mod_engine_input.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engine_input_block.o \
+                          $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_engineup_interface.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+# Interface-only module for EngineUp (see mod_engineup_interface.f90's
+# own header) - depends on nothing but sits in io_objects (harness-only,
+# same reasoning as the comment above io_objects' own definition).
+$(BUILDDIR)/mod_engineup_interface.o: mod_engineup_interface.f90 | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 
-Engine : $(BUILDDIR)/run_engine.o $(io_objects) $(BUILDDIR)/mod_version.o $(BUILDDIR)/libengine.a $(LIBDIR)/libcint_ecp.a $(LIBCINTDIR)/build/libcint.a $(OPENBLASDIR)/libopenblas.a $(LIBXCDIR)/build/libxcf03.a $(TOMLF_PREREQ)
-	$(FORT90) -o Engine -fbacktrace -fopenmp $(BUILDDIR)/run_engine.o $(io_objects) $(BUILDDIR)/mod_version.o $(BUILDDIR)/libengine.a $(LIBCINTDIR)/build/libcint.a $(LIBDIR)/libcint_ecp.a $(OPENBLASDIR)/libopenblas.a $(LIBXCDIR)/build/libxcf03.a $(LIBXCDIR)/build/libxc.a -lpthread -L$(DFTD3DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD3DIR)/build' -ls-dftd3 -L$(MCTCDIR)/build -lmctc-lib -L$(GCPDIR)/build -Wl,-rpath,'$$ORIGIN/$(GCPDIR)/build' -lgcp -L$(DFTD4DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD4DIR)/build' -ldftd4 -L$(THIRDPARTY_INSTALL)/lib -lmulticharge $(TOMLF_LINKFLAGS)
+Direwolf : $(BUILDDIR)/run_engine.o $(io_objects) $(BUILDDIR)/mod_version.o $(BUILDDIR)/libengine.a $(LIBDIR)/libcint_ecp.a $(LIBCINTDIR)/build/libcint.a $(OPENBLASDIR)/libopenblas.a $(LIBXCDIR)/build/libxcf03.a $(TOMLF_PREREQ)
+	$(FORT90) -o Direwolf -fbacktrace -fopenmp $(BUILDDIR)/run_engine.o $(io_objects) $(BUILDDIR)/mod_version.o $(BUILDDIR)/libengine.a $(LIBCINTDIR)/build/libcint.a $(LIBDIR)/libcint_ecp.a $(OPENBLASDIR)/libopenblas.a $(LIBXCDIR)/build/libxcf03.a $(LIBXCDIR)/build/libxc.a -lpthread -L$(DFTD3DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD3DIR)/build' -ls-dftd3 -L$(MCTCDIR)/build -lmctc-lib -L$(GCPDIR)/build -Wl,-rpath,'$$ORIGIN/$(GCPDIR)/build' -lgcp -L$(DFTD4DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD4DIR)/build' -ldftd4 -L$(THIRDPARTY_INSTALL)/lib -lmulticharge $(TOMLF_LINKFLAGS)
 
 .PHONY : clean
 clean :
-	rm -f Engine $(objects) $(io_objects) $(BUILDDIR)/run_engine.o $(BUILDDIR)/libengine.a $(BUILDDIR)/*.mod \
+	rm -f Direwolf $(objects) $(io_objects) $(BUILDDIR)/run_engine.o $(BUILDDIR)/libengine.a $(BUILDDIR)/*.mod \
 	      $(BUILDDIR)/mod_version.f90 $(BUILDDIR)/mod_version.o \
 	      $(BUILDDIR)/nr_ecp.o $(BUILDDIR)/nr_ecp_deriv.o $(BUILDDIR)/ecp2f.o $(LIBDIR)/libcint_ecp.a

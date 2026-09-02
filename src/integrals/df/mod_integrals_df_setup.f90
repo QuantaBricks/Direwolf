@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Density-fitting setup: auxiliary basis construction and 3-center/2-center integral assembly.
 
@@ -136,6 +136,8 @@ do i = 1,nAtoms
       case("d"); L = 2
       case("f"); L = 3
       case("g"); L = 4
+      case("h"); L = 5
+      case("i"); L = 6
       case default
          cycle
       end select
@@ -177,6 +179,8 @@ do i = 1,nAtoms
       case("d"); L = 2
       case("f"); L = 3
       case("g"); L = 4
+      case("h"); L = 5
+      case("i"); L = 6
       end select
       shidx = shidx + 1
       basDF(1,shidx) = i-1
@@ -333,9 +337,7 @@ block
                                               df_total_pairs_actual=df_total_pairs_est)
    df_avail_bytes = engine_avail_at_start_bytes
    df_direct_mode = .true.
-   if (RS_omega .gt. 0.0d0 .and. engine_use_df_k .and. engine_do_force) then
-      df_direct_mode = (df_need_bytes > df_avail_bytes)
-   endif
+   if (engine_use_df_k) df_direct_mode = (df_need_bytes > df_avail_bytes)
    force_direct_env = ""
    call get_environment_variable("ENGINE_FORCE_DF_DIRECT", force_direct_env)
    if (trim(force_direct_env) .eq. "1") df_direct_mode = .true.

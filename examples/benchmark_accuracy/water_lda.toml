@@ -1,0 +1,62 @@
+[molecule]
+  ncenters = 3
+  imult = 1
+  icharge = 0
+  functional = "LDA"
+  baselabel = "6-31g"
+  ecplabel = ""
+  basedir = ""
+  J = "exact"
+  K = "exact"
+  ri_aux_basis = ""
+  spherical = true
+  harris_guess = true
+  calc_force = true
+  vv10_nonself = false
+  mem_cap_gb = "0.0"
+  estimate_only = false
+  n_threads = 0
+  verbose = 1
+  scf_conv_level = 0
+
+[atoms]
+  element = [ "O", "H", "H" ]
+  x = [ "0.0", "0.7584", "-0.7584" ]
+  y = [ "0.0", "0.0", "0.0" ]
+  z = [ "0.0", "0.5861", "0.5861" ]
+  basis = [ "", "", "" ]
+  ecp = [ "", "", "" ]
+
+[pointcharges]
+  npc = 0
+  q = [ ]
+  x = [ ]
+  y = [ ]
+  z = [ ]
+
+[checkpoint]
+  chk_read = false
+  chk_write = false
+  chk_file = ""
+
+[molden]
+  molden_write = false
+  molden_file = ""
+  molden_read = false
+  molden_read_file = ""
+
+[cosmo]
+  cosmo_on = false
+  cosmo_epsilon = "78.4"
+  cosmo_radii_scale = "1.2"
+  cosmo_avg_area = "0.3"
+  cosmo_sigma_rav = "0.5"
+  cosmo_cavity_type = "gepol"
+  cosmo_rsolv = "0.0"
+  cosmo_ks_nseg = 92
+  cosmo_ks_nface = 1082
+  cosmo_sigma_profile_file = ""
+  cosmo_solvent = ""
+  cosmo_smd = false
+
+[environment]

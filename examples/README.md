@@ -47,8 +47,7 @@ Directories are grouped by purpose:
   - `water_smd_toluene.inp` - full SMD (electrostatics + CDS
     non-electrostatic term) in toluene.
   - `water_sigma_profile.inp` - COSMO-RS-style sigma-profile export
-    (`cosmo_sigma_profile_file`, `cosmo_cavity_type='ks1993'`) - an
-    advanced/non-OSS feature, see docs/ADVANCED_FEATURES.md.
+    (`cosmo_sigma_profile_file`, `cosmo_cavity_type='ks1993'`).
     `ks1993`/`iswig` cavities are energy-only (no analytic gradient),
     so this example also sets `calc_force = .false.`.
 - `misc/` - feature demos that aren't drug molecules or ECP:

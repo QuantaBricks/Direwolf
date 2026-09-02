@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Builds the DFT quadrature grid (Becke partitioning, radial/angular point generation, including NLC/VV10 variants).
 
@@ -19,11 +19,11 @@ INCLUDE 'parameter.h'
     integer    :: iatm
     integer    :: totGrid,radpot,sphpot
     integer    :: nr_quarter,cursphpot,row
-    logical    :: smooth_tier
     integer,allocatable    :: grdRec(:,:)
     real(8),allocatable    :: potx(:),poty(:),potz(:),potw(:)
     real(8)    :: radx,radr,radw,ratio
     real(8)    :: parm
+    real(8)    :: radr_pre,radw_pre
     real(8)    :: rmiu,tmps,sij
     integer    :: n_pairs,ip
     integer,allocatable :: pair_i(:),pair_j(:)
@@ -36,7 +36,7 @@ INCLUDE 'parameter.h'
 
     real(8),allocatable    :: Pvec(:)
     integer,allocatable    :: atom_offset(:)
-    integer :: nr_quarter_pre, cursphpot_pre, atom_npts
+    integer :: atom_npts
 
    call gridgen_count_points(totGrid, grdRec)
    print '(A,I0)',"  VXC grid points: ",totGrid
@@ -98,30 +98,20 @@ INCLUDE 'parameter.h'
          endif
       enddo
    enddo
-   smooth_tier = (xcgrid_level .eq. XCGRID_COARSE .or. xcgrid_level .eq. XCGRID_FINE)
    allocate(atom_offset(natoms))
    atom_npts = 0
    do iatm = 1,natoms
       atom_offset(iatm) = atom_npts
-    if (smooth_tier) then
       select case (int(atoms(iatm)%charge))
       case (:2);   row = 1
       case (3:10); row = 2
       case default; row = 3
       end select
-      parm = covrad(atoms(iatm)%charge)/2*ans2bohr
-      if (atoms(iatm)%charge .eq. 1) parm = covrad(atoms(iatm)%charge)*1.3*ans2bohr
       do i = 1,grdRec(iatm,1)
-         radx = cos(i*PI/(grdRec(iatm,1)+1))
-         ratio = (1+radx)/(1-radx) * (parm/(covrad(atoms(iatm)%charge)*ans2bohr))
-         atom_npts = atom_npts + xcgrid_prune_sphpot_pyscf(grdRec(iatm,2), ratio, row)
+         call xcgrid_m3_radial(int(atoms(iatm)%charge), i, grdRec(iatm,1), radr_pre, radw_pre)
+         ratio = radr_pre / (covrad(atoms(iatm)%charge)*ans2bohr)
+         atom_npts = atom_npts + xcgrid_prune_orca(grdRec(iatm,2), ratio, row)
       enddo
-    else
-      nr_quarter_pre = max(1,grdRec(iatm,1)/4)
-      do i = 1,grdRec(iatm,1)
-         atom_npts = atom_npts + xcgrid_prune_sphpot(grdRec(iatm,2), i, nr_quarter_pre)
-      enddo
-    endif
    enddo
 
    !$omp parallel &
@@ -136,23 +126,17 @@ INCLUDE 'parameter.h'
       radpot = grdRec(iatm,1)
       sphpot = grdRec(iatm,2)
       label = atom_offset(iatm) + 1
-      nr_quarter = max(1,radpot/4)
       select case (int(atoms(iatm)%charge))
       case (:2);   row = 1
       case (3:10); row = 2
       case default; row = 3
       end select
-      parm = covrad(atoms(iatm)%charge)/2*ans2bohr
-      if (atoms(iatm)%charge .eq. 1) parm =covrad(atoms(iatm)%charge)*1.3*ans2bohr
       do i = 1,radpot
-         radx = cos(i*PI/(radpot+1))
-         if (smooth_tier) then
-            ratio = (1+radx)/(1-radx) * (parm/(covrad(atoms(iatm)%charge)*ans2bohr))
-            cursphpot = xcgrid_prune_sphpot_pyscf(sphpot, ratio, row)
-         else
-            cursphpot = xcgrid_prune_sphpot(sphpot, i, nr_quarter)
-         endif
+         call xcgrid_m3_radial(int(atoms(iatm)%charge), i, radpot, radr, radw)
+         ratio = radr / (covrad(atoms(iatm)%charge)*ans2bohr)
+         cursphpot = xcgrid_prune_orca(sphpot, ratio, row)
          if (cursphpot .eq. 974) call LD0974(potx,poty,potz,potw,Ntemp)
+         if (cursphpot .eq. 770) call LD0770(potx,poty,potz,potw,Ntemp)
          if (cursphpot .eq. 590) call LD0590(potx,poty,potz,potw,Ntemp)
          if (cursphpot .eq. 434) call LD0434(potx,poty,potz,potw,Ntemp)
          if (cursphpot .eq. 350) call LD0350(potx,poty,potz,potw,Ntemp)
@@ -166,8 +150,7 @@ INCLUDE 'parameter.h'
          if (cursphpot .eq. 74)  call LD0074(potx,poty,potz,potw,Ntemp)
          if (cursphpot .eq. 50)  call LD0050(potx,poty,potz,potw,Ntemp)
          if (cursphpot .eq. 26)  call LD0026(potx,poty,potz,potw,Ntemp)
-         radr = (1+radx)/(1-radx)*parm
-         radw = 2*PI/(radpot+1)*parm**3*(1+radx)**2.5D0/(1-radx)**3.5D0*4*PI
+         if (cursphpot .eq. 14)  call LD0014(potx,poty,potz,potw,Ntemp)
          do j = 1,Ntemp
             Grids(label)%coor(1)=radr*potx(j) + atoms(iatm)%coor(1)*ans2bohr
             Grids(label)%coor(2)=radr*poty(j) + atoms(iatm)%coor(2)*ans2bohr
@@ -758,73 +741,41 @@ end subroutine mergesort_morton
 
 subroutine gridgen_count_points(totGrid, grdRec)
 use MOL_info
-use GRID_info, only: xcgrid_level, XCGRID_RSCALE, XCGRID_SPH_IN, &
-                     XCGRID_SPH_EDGE, xcgrid_prune_sphpot_pyscf, xcgrid_prune_sphpot, &
+use GRID_info, only: xcgrid_level, xcgrid_m3_radial, xcgrid_prune_orca, &
+                     XCGRID_M3_ANGGRID, XCGRID_M3_RSCALE, XCGRID_M3_NRAD, &
                      force_dense, force_dense_mgga, XCGRID_FINE, XCGRID_COARSE
 implicit none
 INCLUDE 'parameter.h'
 integer,intent(out) :: totGrid
 integer,allocatable,intent(out) :: grdRec(:,:)
-integer :: iatm, radpot, sphpot, cursphpot, i, row, nr_quarter
-logical :: smooth_tier
-real(8) :: grid_scale, parm, radx, ratio
-
-grid_scale = XCGRID_RSCALE(xcgrid_level)
-
-smooth_tier = (xcgrid_level .eq. XCGRID_COARSE .or. xcgrid_level .eq. XCGRID_FINE)
+integer :: iatm, radpot, sphpot, i, row, nr_quarter
+real(8) :: ratio, radr, radw
 
 totGrid = 0
 allocate(grdRec(natoms,2))
 do iatm = 1,natoms
- if (smooth_tier) then
    select case (int(atoms(iatm)%charge))
-   case (:2);    radpot = 50;  sphpot = 302; row = 1
-   case (3:10);  radpot = 75;  sphpot = 302; row = 2
-   case (11:18); radpot = 80;  sphpot = 434; row = 3
-   case (19:36); radpot = 90;  sphpot = 434; row = 3
-   case (37:54); radpot = 95;  sphpot = 434; row = 3
-   case (55:86); radpot = 100; sphpot = 434; row = 3
-   case default; radpot = 105; sphpot = 434; row = 3
+   case (:2);    row = 1
+   case (3:10);  row = 2
+   case (11:18); row = 3
+   case (19:36); row = 4
+   case (37:54); row = 5
+   case (55:86); row = 6
+   case default; row = 7
    end select
-   if (xcgrid_level .ne. XCGRID_FINE) radpot = nint(radpot * grid_scale)
-     if (force_dense) then
-        radpot = 99
-        sphpot = 434
-     endif
-     grdRec(iatm,1) = radpot
-    grdRec(iatm,2) = sphpot
-   parm = covrad(atoms(iatm)%charge)/2*ans2bohr
-   if (atoms(iatm)%charge .eq. 1) parm = covrad(atoms(iatm)%charge)*1.3*ans2bohr
-   do i = 1,radpot
-      radx = cos(i*PI/(radpot+1))
-      ratio = (1+radx)/(1-radx) * (parm/(covrad(atoms(iatm)%charge)*ans2bohr))
-      totGrid = totGrid + xcgrid_prune_sphpot_pyscf(sphpot, ratio, row)
-   enddo
- else
-   if (atoms(iatm)%charge .le. 2 ) then
-      radpot = 35
-   elseif (atoms(iatm)%charge .le. 10 ) then
-      radpot = 50
-   else
-      radpot = 65
+   radpot  = max(10, nint(XCGRID_M3_NRAD(row) * XCGRID_M3_RSCALE(xcgrid_level)))
+   sphpot  = XCGRID_M3_ANGGRID(xcgrid_level)
+   if (force_dense) then
+      radpot = max(radpot, 99)
+      sphpot = max(sphpot, 7)
    endif
-   if (sum(linkMat(iatm,:)) .le.1 ) then
-      sphpot = XCGRID_SPH_EDGE(xcgrid_level)
-   else
-      sphpot = XCGRID_SPH_IN(xcgrid_level)
-      radpot = radpot +15
-   endif
-     radpot = nint(radpot * grid_scale)
-     if (force_dense) then
-        radpot = 99
-        sphpot = 434
-     endif
-     grdRec(iatm,1) = radpot
-    grdRec(iatm,2) = sphpot
-   nr_quarter = max(1,radpot/4)
+   grdRec(iatm,1) = radpot
+   grdRec(iatm,2) = sphpot
+   nr_quarter = min(row, 3)
    do i = 1,radpot
-      totGrid = totGrid + xcgrid_prune_sphpot(sphpot, i, nr_quarter)
+      call xcgrid_m3_radial(int(atoms(iatm)%charge), i, radpot, radr, radw)
+      ratio = radr / (covrad(atoms(iatm)%charge)*ans2bohr)
+      totGrid = totGrid + xcgrid_prune_orca(sphpot, ratio, nr_quarter)
    enddo
- endif
 enddo
 end subroutine gridgen_count_points

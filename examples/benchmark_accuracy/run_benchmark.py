@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 QuantaBricks
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0-or-later
 
 """Run every functional-accuracy test in this directory and diff
 against references.csv. See README.md for what this set covers and
@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ENGINE_DEFAULT = HERE.parent.parent / "Engine"
+ENGINE_DEFAULT = HERE.parent.parent / "Direwolf"
 
 
 def run_one(engine_path, inp_path, out_path):
@@ -30,7 +30,7 @@ def run_one(engine_path, inp_path, out_path):
         capture_output=True, text=True, timeout=600,
     )
     if result.returncode != 0:
-        return None, f"Engine exited {result.returncode}: {result.stderr.strip()[:200]}"
+        return None, f"Direwolf exited {result.returncode}: {result.stderr.strip()[:200]}"
     text = out_path.read_text()
     m = re.search(r"Total Energy \(Hartree\)\s*=\s*(-?\d+\.\d+)", text)
     if not m:
@@ -43,7 +43,7 @@ def main():
     if len(sys.argv) > 1 and sys.argv[1] == "--engine":
         engine_path = Path(sys.argv[2])
     if not engine_path.exists():
-        print(f"Engine binary not found at {engine_path} - build it first (make, from the repo root).")
+        print(f"Direwolf binary not found at {engine_path} - build it first (make, from the repo root).")
         return 1
 
     with open(HERE / "references.csv") as f:
@@ -51,7 +51,7 @@ def main():
 
     all_ok = True
     width = max(len(r["functional"]) for r in rows)
-    print(f"{'Functional':<{width}}  {'Engine (Ha)':>18}  {'Reference (Ha)':>18}  {'diff':>10}  {'tol':>8}  status")
+    print(f"{'Functional':<{width}}  {'Direwolf (Ha)':>18}  {'Reference (Ha)':>18}  {'diff':>10}  {'tol':>8}  status")
     with tempfile.TemporaryDirectory() as tmpdir:
         for row in rows:
             inp = HERE / row["input"]

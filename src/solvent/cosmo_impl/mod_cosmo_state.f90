@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! mod_cosmo_state: the module-level state shared by cosmo_init/
 
@@ -36,5 +36,11 @@ real(8),allocatable :: B_store(:,:,:)
 integer :: nConts_saved = 0
 
 real(8),allocatable :: q_last(:)
+
+real(8),allocatable :: Vtot_last(:)
+
+logical :: cosmors_request = .false.
+character(256) :: cosmors_cosmo_file_req = ''
+character(64) :: cosmors_compound_name_req = ''
 
 end module mod_cosmo_state

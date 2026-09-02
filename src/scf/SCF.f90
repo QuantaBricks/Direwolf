@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Main SCF iteration driver (Fock build, DIIS, convergence check) - SCFcycle.
 
@@ -23,6 +23,8 @@ INCLUDE 'parameter.h'
     logical,intent(in) :: do_force
     integer    :: iter,iconv
     integer    :: i,j,k,n,m,info,info_sol
+    integer    :: elock_streak
+    real(8)    :: plateau_prms_max
     real(8)    :: E_n
     real(8)    :: Exc
     real(8)    :: Prms
@@ -45,6 +47,7 @@ INCLUDE 'parameter.h'
     integer(8) :: wc1,wc2,wc6,wc_rate
     iter = 1
     iconv = 0
+    elock_streak = 0
     Prms = 0.0d0
     call system_clock(count_rate=wc_rate)
     call scf_hist_reset()
@@ -53,6 +56,12 @@ INCLUDE 'parameter.h'
     call get_environment_variable("ENGINE_DIIS_DEBUG", diis_dbg_env)
     diis_debug = (trim(diis_dbg_env) .eq. "1")
     DIIS_MAX = 10
+    do i = 1, Natoms
+       associate (z => atoms(i)%charge)
+       if ((z.ge.21 .and. z.le.30) .or. (z.ge.39 .and. z.le.48) .or. &
+           (z.ge.57 .and. z.le.80) .or. (z.ge.89 .and. z.le.112)) DIIS_MAX = 15
+       end associate
+    enddo
     call get_environment_variable("ENGINE_DIIS_WINDOW", diis_env)
     if (len_trim(diis_env) .gt. 0) read(diis_env,*) DIIS_MAX
     if (DIIS_MAX .lt. 1) DIIS_MAX = 1
@@ -175,6 +184,19 @@ INCLUDE 'parameter.h'
 
         deallocate(Pc)
         econv_out = abs(E_n+E_rep-E)
+        if (econv_out.le.3.0d0*Emax) then
+           elock_streak = elock_streak + 1
+        else
+           elock_streak = 0
+        endif
+        plateau_prms_max = merge(30.0d0, 0.0d0, cosx_enabled) * Pmax
+        if (econv_out.le.3.0d0*Emax .and. Prms.gt.Pmax .and. Prms.le.plateau_prms_max &
+            .and. elock_streak.ge.8) then
+           print '("Convergence: dE=",ES10.3," Hartree, dP=",ES10.3," (energy plateau; dP noise in near-degenerate manifold)")', &
+                 E_n+E_rep-E, Prms
+           Prms = Pmax
+           econv_out = Emax
+        endif
         if (econv_out.le.Emax .and. Prms.le.Pmax  ) then
              print '("Convergence: dE=",ES10.3," Hartree, dP=",ES10.3)',E_n+E_rep-E,Prms
             if (cosx_enabled .and. .not. cosx_force_hi_grid) then

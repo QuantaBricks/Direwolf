@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! run_engine: a thin, file-driven example front end for the Engine
 
@@ -13,6 +13,8 @@ use mod_integrals, only: df_direct_mode, df_force_direct_mode, &
 use mod_profile, only: prof_report
 use mod_version, only: engine_version, engine_git_version
 use mod_vv10, only: vv10_report
+use mod_checkpoint, only: checkpoint_read, checkpoint_write
+use mod_engineup_interface, only: EngineUp
 implicit none
 
 type(engine_input_t) :: spec
@@ -21,6 +23,8 @@ integer,allocatable  :: atomchg_a(:)
 real(8),allocatable  :: coord_a(:,:)
 real(8),allocatable  :: force_out(:,:), MLcharge_out(:)
 real(8),allocatable  :: pc_charge_a(:), pc_coord_a(:,:)
+real(8),allocatable  :: dens_in_a(:,:), dens_in_b(:,:)
+real(8),allocatable  :: dens_out_a(:,:), dens_out_b(:,:)
 
 integer       :: iconv
 real(8)       :: energy_out, econv
@@ -52,7 +56,7 @@ block
       if (verbose_peek == 1) then
          open(unit=6, file=trim(outfile), status='replace', action='write')
          write(6,'(A)') '[HEADER]'
-         write(6,'(A,A)') 'Engine version: ', engine_version
+         write(6,'(A,A)') 'Direwolf version: ', engine_version
          write(6,'(A,A)') 'Build: ', engine_git_version
          out_unit = 6
       else
@@ -83,6 +87,25 @@ do i = 1, spec%npc
    pc_coord_a(i, 3) = spec%pc_z(i)
 enddo
 
+block
+use MOL_info, only: resp_charges_on
+resp_charges_on = spec%resp_charges_on
+end block
+
+allocate(dens_in_a(0,0), dens_in_b(0,0))
+if (spec%chk_read) then
+   block
+      real(8),allocatable :: tmp_a(:,:), tmp_b(:,:)
+      logical :: chk_ok
+      call checkpoint_read(trim(spec%chk_file), tmp_a, tmp_b, chk_ok)
+      if (chk_ok) then
+         deallocate(dens_in_a, dens_in_b)
+         call move_alloc(tmp_a, dens_in_a)
+         call move_alloc(tmp_b, dens_in_b)
+      endif
+   end block
+endif
+
 call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
               coord_a, atomchg_a, spec%baselabel, spec%ecplabel, &
               spec%atom_basis, spec%atom_ecp, &
@@ -90,18 +113,20 @@ call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
               spec%calc_force, spec%vv10_nonself, spec%mem_cap_gb, &
               spec%estimate_only, spec%n_threads, &
               spec%npc, pc_charge_a, pc_coord_a, &
-              spec%chk_read, spec%chk_write, trim(spec%chk_file), &
               spec%molden_write, trim(spec%molden_file), spec%molden_read, trim(spec%molden_read_file), &
               spec%cosmo_on, spec%cosmo_epsilon, spec%cosmo_radii_scale, spec%cosmo_avg_area, spec%cosmo_sigma_rav, &
               trim(spec%cosmo_cavity_type), spec%cosmo_rsolv, spec%cosmo_ks_nseg, spec%cosmo_ks_nface, &
               trim(spec%cosmo_sigma_profile_file), &
               spec%cosmo_smd, trim(spec%cosmo_solvent), &
               force_out, energy_out, MLcharge_out, iconv, econv, &
-              mem_grid_gb, mem_2e_gb, spec%scf_conv_level, trim(spec%basedir))
+              mem_grid_gb, mem_2e_gb, spec%scf_conv_level, trim(spec%basedir), &
+              dens_in_a, dens_in_b, dens_out_a, dens_out_b)
+
+if (spec%chk_write .and. iconv .eq. 1) call checkpoint_write(trim(spec%chk_file), dens_out_a, dens_out_b)
 
 if (out_unit == 11) then
    open(unit=11, file=trim(outfile), status='replace', action='write')
-   write(11, '(A,A)')        'Engine version       = ', engine_version
+   write(11, '(A,A)')        'Direwolf version     = ', engine_version
    write(11, '(A,A)')        'Build                = ', engine_git_version
 endif
 if (.not. spec%estimate_only) then

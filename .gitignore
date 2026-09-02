@@ -37,13 +37,20 @@ fort.*
 *.exe
 *.out
 *.app
-/Engine
+/Direwolf
 /build/
 
-# benchmark/accuracy keeps its Engine/Psi4 .out files on purpose (kept
-# as checked-in test evidence, not build byproducts)
-!/benchmark/accuracy/Engine/*.out
-!/benchmark/accuracy/Psi4/*.out
+# benchmark/accuracy: only systems.json + run_accuracy.py are tracked.
+# Generated inputs, outputs, results and report tables are machine-
+# specific - regenerate with `python3 run_accuracy.py`.
+/benchmark/accuracy/Engine/
+/benchmark/accuracy/Psi4/
+/benchmark/accuracy/orca/
+/benchmark/accuracy/.psi4_scratch/
+/benchmark/accuracy/__pycache__/
+/benchmark/accuracy/results.json
+/benchmark/accuracy/*.md
+/benchmark/accuracy/*.log
 
 # Third-party dependency chain: source is vendored (third_party/*), the
 # build OUTPUT is not - `make Engine` builds all of it automatically

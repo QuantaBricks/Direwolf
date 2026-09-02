@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! mod_integrals: the sole boundary between the rest of Engine and the
 
@@ -34,6 +34,7 @@ public :: integrals_build_exchange_cosx_sr
 public :: integrals_force_exchange_cosx
 public :: integrals_build_exchange_lr
 public :: integrals_build_coulomb_df
+public :: df_build_coulomb_core
 public :: integrals_build_exchange_df
 public :: integrals_build_exchange_df_lr
 public :: integrals_force_df
@@ -59,9 +60,12 @@ public :: nRec
 public :: nContsAux
 public :: compute_atomic_density
 public :: calc_properties
+public :: resp_charges
 public :: engine_harris_guess
 public :: cosmo_build_one_tess_matrix
 public :: cosmo_build_one_tess_matrix_shellderiv
+public :: esp_at_grid_batch
+public :: esp_at_grid_batch_df
 
 logical :: engine_use_df = .false.
 logical :: engine_use_df_j = .false.
@@ -706,17 +710,41 @@ real(8),allocatable,intent(out) :: Pa_atom(:,:), Pb_atom(:,:)
 logical,intent(out) :: ok
 end subroutine compute_atomic_density
 
-module subroutine calc_properties(Natoms_in, MLcharge_out)
+module subroutine calc_properties(Natoms_in, MLcharge_out, RESPcharge_in)
 implicit none
 integer,intent(in) :: Natoms_in
 real(8),intent(out) :: MLcharge_out(Natoms_in)
+real(8),intent(in),optional :: RESPcharge_in(Natoms_in)
 end subroutine calc_properties
+
+module subroutine resp_charges(Natoms_in, RESPcharge_out)
+implicit none
+integer,intent(in) :: Natoms_in
+real(8),intent(out) :: RESPcharge_out(Natoms_in)
+end subroutine resp_charges
 
 module subroutine cosmo_build_one_tess_matrix(tess_pos_bohr, Bk)
 implicit none
 real(8),intent(in) :: tess_pos_bohr(3)
 real(8),intent(out) :: Bk(:,:)
 end subroutine cosmo_build_one_tess_matrix
+
+module subroutine esp_at_grid_batch(npts, grid_bohr, Ptot, V_elec)
+implicit none
+integer,intent(in) :: npts
+real(8),intent(in) :: grid_bohr(3,npts)
+real(8),intent(in) :: Ptot(:,:)
+real(8),intent(out) :: V_elec(npts)
+end subroutine esp_at_grid_batch
+
+module subroutine esp_at_grid_batch_df(npts, grid_bohr, Ptot, V_elec, ok)
+implicit none
+integer,intent(in) :: npts
+real(8),intent(in) :: grid_bohr(3,npts)
+real(8),intent(in) :: Ptot(:,:)
+real(8),intent(out) :: V_elec(npts)
+logical,intent(out) :: ok
+end subroutine esp_at_grid_batch_df
 
 module subroutine cosmo_build_one_tess_matrix_shellderiv(tess_pos_bohr, dBk)
 implicit none

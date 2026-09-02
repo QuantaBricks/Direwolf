@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! scf_diis: the DIIS/ADIIS Fock-matrix extrapolation step extracted from
 
@@ -89,7 +89,7 @@ if (diis_n .ge. 2) then
       print *,"RTDBG entering DGELSS iter=",iter,"diis_n=",diis_n
       call flush(6)
    endif
-   call DGELSS(nsz,nsz,1,Bmat,nsz,rhs,nsz,Bsvd,1.0d-10,rank_lapack, &
+   call DGELSS(nsz,nsz,1,Bmat,nsz,rhs,nsz,Bsvd,1.0d-5,rank_lapack, &
                work_lapack,lwork_lapack,info_diis)
    if (diis_debug) then
       print *,"RTDBG DGELSS done"

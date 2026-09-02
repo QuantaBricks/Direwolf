@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! mod_cosmo_scf: the per-SCF-iteration COSMO step (solve for tessera
 
@@ -17,6 +17,15 @@ character(*),intent(in) :: output_file
 debug_sigma_rav = r_av_ang
 debug_sigma_profile_file = trim(output_file)
 end subroutine cosmo_set_sigma_profile_debug
+
+subroutine cosmo_set_cosmors_request(on, cosmo_file, compound_name)
+implicit none
+logical,intent(in) :: on
+character(*),intent(in) :: cosmo_file, compound_name
+cosmors_request = on
+cosmors_cosmo_file_req = trim(cosmo_file)
+cosmors_compound_name_req = trim(compound_name)
+end subroutine cosmo_set_cosmors_request
 
 subroutine cosmo_scf_step(nConts, Ptot, Fock_cosmo, E_cosmo_nuc, iter)
 use mod_integrals, only: cosmo_build_one_tess_matrix
@@ -88,8 +97,10 @@ else
 endif
 
 E_cosmo_nuc = 0.5d0*sum(q_last*V_nuc)
+if (allocated(Vtot_last)) deallocate(Vtot_last)
+call move_alloc(Vtot, Vtot_last)
 
-deallocate(V_elec, Vtot, q0)
+deallocate(V_elec, q0)
 end subroutine cosmo_scf_step
 
 subroutine cosmo_report_sigma_profile(r_av_ang, output_file)
@@ -105,6 +116,15 @@ if (len_trim(output_file) == 0) return
 
 end subroutine cosmo_report_sigma_profile
 
+subroutine cosmo_write_dot_cosmo_file(natoms, coor_ang, method_functional, method_basis, E_tot)
+implicit none
+integer,intent(in) :: natoms
+real(8),intent(in) :: coor_ang(3,natoms)
+character(*),intent(in) :: method_functional, method_basis
+real(8),intent(in) :: E_tot
+
+end subroutine cosmo_write_dot_cosmo_file
+
 subroutine cosmo_finalize()
 implicit none
 cosmo_enabled = .false.
@@ -118,6 +138,7 @@ if (allocated(A_ipiv)) deallocate(A_ipiv)
 if (allocated(saved_Ainv1)) deallocate(saved_Ainv1)
 if (allocated(B_store)) deallocate(B_store)
 if (allocated(q_last)) deallocate(q_last)
+if (allocated(Vtot_last)) deallocate(Vtot_last)
 if (allocated(saved_Z)) deallocate(saved_Z)
 if (allocated(saved_ecpCoreElec)) deallocate(saved_ecpCoreElec)
 if (allocated(debug_prev_hist)) deallocate(debug_prev_hist)

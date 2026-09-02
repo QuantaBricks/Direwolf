@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! COSX long-range K_LR (erf(omega*r)/r) builder - split out of mod_integrals_exchange_cosx.f90
 

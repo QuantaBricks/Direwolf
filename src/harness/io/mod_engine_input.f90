@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! Top-level Engine input-file parser: reads an .inp file's namelist
 
@@ -46,6 +46,7 @@ character(256) :: chk_file
 logical        :: molden_write, molden_read
 character(256) :: molden_file, molden_read_file
 
+logical        :: resp_charges_on
 logical        :: cosmo_on
 real(8)        :: cosmo_epsilon, cosmo_radii_scale, cosmo_sigma_rav, cosmo_avg_area
 character(16)  :: cosmo_cavity_type
@@ -85,7 +86,7 @@ end interface
 
 namelist /molecule/ ncenters, imult, icharge, functional, baselabel, ecplabel, basedir, unit, xyzfile, &
                      J, K, ri_aux_basis, spherical, harris_guess, calc_force, vv10_nonself, &
-                     mem_cap_gb, estimate_only, n_threads, verbose, scf_conv
+                     mem_cap_gb, estimate_only, n_threads, verbose, scf_conv, resp_charges_on
 namelist /pointcharges/ npc, pc_q, pc_x, pc_y, pc_z
 namelist /checkpoint/ chk_read, chk_write, chk_file
 namelist /molden/ molden_write, molden_file, molden_read, molden_read_file
@@ -123,6 +124,7 @@ npc = 0; pc_q = 0.0d0; pc_x = 0.0d0; pc_y = 0.0d0; pc_z = 0.0d0
 chk_read = .false.; chk_write = .false.; chk_file = ''
 molden_write = .false.; molden_file = ''
 molden_read = .false.; molden_read_file = ''
+resp_charges_on = .true.
 cosmo_on = .false.; cosmo_epsilon = 78.4d0; cosmo_radii_scale = 1.2d0
 cosmo_avg_area = 0.3d0; cosmo_sigma_rav = 0.5d0
 cosmo_sigma_profile_file = ''
@@ -278,6 +280,7 @@ spec%chk_read = chk_read; spec%chk_write = chk_write; spec%chk_file = chk_file
 spec%molden_write = molden_write; spec%molden_file = molden_file
 spec%molden_read = molden_read; spec%molden_read_file = molden_read_file
 
+spec%resp_charges_on = resp_charges_on
 spec%cosmo_on = cosmo_on; spec%cosmo_epsilon = cosmo_epsilon
 spec%cosmo_radii_scale = cosmo_radii_scale; spec%cosmo_avg_area = cosmo_avg_area
 spec%cosmo_sigma_rav = cosmo_sigma_rav; spec%cosmo_cavity_type = cosmo_cavity_type

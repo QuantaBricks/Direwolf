@@ -1,5 +1,5 @@
 ! Copyright (c) 2026 QuantaBricks
-! SPDX-License-Identifier: Apache-2.0
+! SPDX-License-Identifier: AGPL-3.0-or-later
 
 ! read basis set and integral
 
@@ -8,7 +8,6 @@ subroutine guess(info,Gtype,Pa_chk,Pb_chk)
 use MOL_info
 use GRID_info, only: xcgrid_dynamic
 use mod_vv10, only: vv10_active_now, vv10_dynamic
-use mod_integrals, only: near_singular_overlap
     implicit none
 INCLUDE 'parameter.h'
     integer    :: info,Gtype
@@ -61,8 +60,34 @@ INCLUDE 'parameter.h'
        C_b = 0.0d0
        if (xcgrid_dynamic) call xcgrid_refine()
        if (vv10_dynamic) vv10_active_now = .true.
-       call scf_build_fock(Pa, Pb, .false., 0, 0.0d0, Exc_dummy, E_dummy, dft_dt_dummy, .false.)
-       call solHFR_KS(info, 0.0d0, near_singular_overlap)
+       block
+          real(8),allocatable :: P_ortho(:,:), Tmp3(:,:), ew(:)
+          real(8),allocatable :: WORK3(:)
+          integer,allocatable :: IWORK3(:)
+          integer :: LWORK3, LIWORK3, INFO3
+          allocate(P_ortho(nconts,nconts), Tmp3(nconts,nconts), ew(nconts))
+          LWORK3  = 1 + 6*nconts + 2*nconts**2
+          LIWORK3 = 3 + 5*nconts
+          allocate(WORK3(LWORK3), IWORK3(LIWORK3))
+
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,S,nconts,Pa_chk,nconts,0.0d0,Tmp3,nconts)
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,Tmp3,nconts,S,nconts,0.0d0,P_ortho,nconts)
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,P_ortho,nconts,X,nconts,0.0d0,Tmp3,nconts)
+          call DGEMM('T','N',nconts,nconts,nconts,1.0d0,X,nconts,Tmp3,nconts,0.0d0,P_ortho,nconts)
+          P_ortho = -P_ortho
+          call DSYEVD('V','U',nconts,P_ortho,nconts,ew,WORK3,LWORK3,IWORK3,LIWORK3,INFO3)
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,X,nconts,P_ortho,nconts,0.0d0,C_a,nconts)
+
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,S,nconts,Pb_chk,nconts,0.0d0,Tmp3,nconts)
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,Tmp3,nconts,S,nconts,0.0d0,P_ortho,nconts)
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,P_ortho,nconts,X,nconts,0.0d0,Tmp3,nconts)
+          call DGEMM('T','N',nconts,nconts,nconts,1.0d0,X,nconts,Tmp3,nconts,0.0d0,P_ortho,nconts)
+          P_ortho = -P_ortho
+          call DSYEVD('V','U',nconts,P_ortho,nconts,ew,WORK3,LWORK3,IWORK3,LIWORK3,INFO3)
+          call DGEMM('N','N',nconts,nconts,nconts,1.0d0,X,nconts,P_ortho,nconts,0.0d0,C_b,nconts)
+
+          deallocate(P_ortho, Tmp3, ew, WORK3, IWORK3)
+       end block
        call scf_build_fock(Pa, Pb, .false., 1, 0.0d0, Exc_dummy, E_dummy, dft_dt_dummy, .false.)
     endif
 end subroutine
