@@ -2,7 +2,7 @@
 
 <img src="imgs/quantabricks_logo.png" alt="QuantaBricks" width="220">
 
-*A [QuantaBricks](https://quantabricks.xyz) product.*
+*A [QuantaBricks](https://www.quantabricks.xyz) product.*
 
 An independent quantum-chemistry engine - Hartree-Fock and DFT energies,
 analytic gradients, and properties - built for speed and for feeding
@@ -585,7 +585,7 @@ Bundled third-party components keep their own licenses (table above).
 version is proprietary-licensed, carries the extra input/interoperability
 and performance modules, and comes without the AGPL copyleft obligation.
 Contact [contact@quanta-bricks.com](mailto:contact@quanta-bricks.com) /
-[quantabricks.xyz](https://quantabricks.xyz).
+[www.quantabricks.xyz](https://www.quantabricks.xyz).
 
 **Data and model training.** Numerical output produced by Direwolf
 (energies, forces, properties, and datasets built from them) is yours.
