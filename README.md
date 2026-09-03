@@ -1,83 +1,66 @@
 # Direwolf
 
-An independent quantum chemistry (QM) engine providing QM calculation
-results for other software, built for speed.
+<img src="imgs/quantabricks_logo.png" alt="QuantaBricks" width="220">
 
-Developer: Xin Chen
+*A [QuantaBricks](https://quantabricks.xyz) product.*
 
-**Status**: under active development since 2025 (AI-assisted); behavior
-and interfaces may still change between commits. See
-[docs/DEVLOG.md](docs/DEVLOG.md) for the project history and what's
-shipped vs. not started yet.
+An independent quantum-chemistry engine - Hartree-Fock and DFT energies,
+analytic gradients, and properties - built for speed and for feeding
+results to other software.
 
-## License
+**Status**: in active development (AI-assisted); interfaces may still
+change between commits. See [docs/DEVLOG.md](docs/DEVLOG.md) for history
+and what is shipped.
 
-Copyright © 2025-2026 QuantaBricks. Developed by Xin Chen.
-
-Direwolf is licensed under the **GNU Affero General Public License v3.0
-or later** (`AGPL-3.0-or-later`) - see [LICENSE](LICENSE). Note AGPL
-§13: running a modified version to provide a service over a network
-obliges you to offer that version's complete source to its users.
-
-For use that AGPL-3.0 does not permit - e.g. embedding Direwolf in a
-closed-source product or service - a separate commercial license is
-available from QuantaBricks.
-
-Bundled third-party dependencies keep their own licenses (table at the
-end of this file).
-
-## Build
+## Install
 
 ```
 make
 ```
-(requires gfortran, gcc, and cmake. Produces `./Direwolf` and
-`lib/libengine.a`; `build/` holds `.o`/`.mod` files.)
 
-Every dependency - libcint, libxc, OpenBLAS/LAPACK, and the `-D3`/`-D3BJ`
-dispersion chain (simple-dftd3 + mctc-lib + toml-f) - is vendored
-SOURCE under `third_party/` and built automatically by this same `make`
-call the first time (each has its own Makefile rule; nothing is
-prebuilt or checked in as a binary). Expect the first `make` to take a
-few minutes (OpenBLAS alone runs its own test suite as part of its
-build); subsequent builds skip anything already built. See "Third-party
-dependencies" below for what's in `third_party/`, each one's license,
-and how it's linked.
+Needs `gfortran`, `gcc`, `cmake`. Every dependency (libcint, libxc,
+OpenBLAS, the D3/D4 dispersion chain) is vendored as source under
+`third_party/` and built automatically on the first `make` - expect a
+few minutes the first time, fast afterwards. Produces `./Direwolf`.
+
+Or with Docker (`Dockerfile` in the repo root):
+
+```
+docker build -t direwolf .
+docker run --rm -v "$PWD":/data direwolf /data/input.inp /data/output.out
+```
+
+(mount input and output under the **same** directory - Direwolf writes
+the output next to its own working directory, not next to the input.)
 
 ## Run
 
 ```
 ./Direwolf <input.inp> [output.out]
 ```
-(output defaults to `<input.inp>.out` if omitted. Single-threaded unless
-`OMP_NUM_THREADS` is set in the environment or `n_threads` is set in the
-input file - see below.)
 
-## Docker
+Output defaults to `<input.inp>.out`. Single-threaded unless
+`OMP_NUM_THREADS` is set or `n_threads` is given in the input file.
+A minimal input:
 
 ```
-docker build -t engine .
-docker run --rm -v "$PWD":/data engine /data/input.inp /data/output.out
+&molecule
+ ncenters   = 3
+ imult      = 1
+ icharge    = 0
+ functional = 'B3LYP'
+ baselabel  = '6-31g'
+&end
+&atoms
+ O   0.0000   0.0000   0.0000
+ H   0.7584   0.0000   0.5861
+ H  -0.7584   0.0000   0.5861
+&end
 ```
 
-Multi-stage build: the first stage compiles Direwolf and every vendored
-`third_party/` dependency from source (same as a plain `make`); the
-final runtime image keeps only the `Direwolf` binary, `data/` (basis
-sets - resolved relative to Direwolf's own path, so it must ship
-alongside the binary), the 3 dynamically-linked LGPL `.so`s
-(simple-dftd3/gcp/dftd4), and the glibc/libgfortran/libgomp runtime
-libraries - about 130MB. `Dockerfile`/`.dockerignore` are tree-generic
-(no path is specific to this repo vs. an exported `release/Direwolf-<ver>/`
-tree - see [docs/RELEASE_EXPORT.md](docs/RELEASE_EXPORT.md)), so the
-same `Dockerfile` builds either one unmodified.
-
-Mount input and output under the **same** directory: Direwolf resolves
-the output path's basename in its own current working directory
-(`/app` inside the container), not the directory component of the path
-you passed - see `run_engine.f90`. Put both files under one `-v` mount
-(as in the example above) rather than under two different host
-directories, or the output will land in `/app` inside the container
-instead of where you expected.
+More worked examples in [`examples/`](examples/) (water up to ~100-basis
+-function drug molecules); the full input grammar is under "Input file
+format" below.
 
 ## Supported functionals and methods
 
@@ -587,3 +570,25 @@ closed-source caller only when dynamic). `gcp` and `dftd4` back the
 gCP/SRB basis-superposition-error correction and D4 dispersion used by
 the "-3c" composite methods (B97-3c, r2SCAN-3c, wB97X-3c - see
 `examples/benchmark_accuracy/README.md`).
+
+## License
+
+Copyright © 2025-2026 QuantaBricks. Developed by Xin Chen.
+
+This open version of Direwolf is licensed under the **GNU Affero General
+Public License v3.0 or later** (`AGPL-3.0-or-later`) - see
+[LICENSE](LICENSE). Under AGPL §13, offering a modified Direwolf as a
+network service obliges you to publish that version's complete source.
+Bundled third-party components keep their own licenses (table above).
+
+**Commercial and production use → Direwolf Advanced.** The Advanced
+version is proprietary-licensed, carries the extra input/interoperability
+and performance modules, and comes without the AGPL copyleft obligation.
+Contact [contact@quanta-bricks.com](mailto:contact@quanta-bricks.com) /
+[quantabricks.xyz](https://quantabricks.xyz).
+
+**Data and model training.** Numerical output produced by Direwolf
+(energies, forces, properties, and datasets built from them) is yours.
+Using Direwolf to generate data and training machine-learning models on
+that data is expressly permitted; the resulting datasets and models are
+not covered by the AGPL and are not derivative works of Direwolf.
