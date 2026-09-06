@@ -143,7 +143,23 @@ subroutine mchrg_ssytrf(amat, ipiv, uplo, info)
    lwork = -1_ik
    call lapack_sytrf(ula, n, amat, lda, ipiv, test, lwork, stat)
    if (stat == 0) then
-      lwork = nint(test(1))
+      ! Padded past the bare workspace-query result (nint(test(1))): the
+      ! vendored OpenBLAS ssytrf/dsytrf's optimal-lwork query has been
+      ! observed to UNDERESTIMATE the space the real (non-query) call
+      ! actually writes, for small (~n=25) matrices - data-dependent,
+      ! since Bunch-Kaufman pivoting picks 1x1 vs 2x2 pivots based on
+      ! matrix VALUES, not just n, so it silently corrupts the heap chunk
+      ! right after work(1:lwork) (glibc's free() catches it much later,
+      ! as "corrupted size vs. prev_size", wherever that memory happens
+      ! to be reused next - reproduced via a real4/real8 EEQ charge-model
+      ! solve from dftd4's r2scan-3c path, J=K=exact caffeine/mtzvpp,
+      ! traced with debug prints in this routine: query returned exactly
+      ! lwork=300, the real call itself reported success (stat=0) and
+      ! work(lwork) read back a normal finite value, yet corruption was
+      ! already sitting past index 300 by the time deallocate() ran into
+      ! it). This padding costs a few KB and is never wrong even if the
+      ! query is already correct - only ever allocates MORE than asked.
+      lwork = nint(test(1)) * 3_ik + 1000_ik
       if (stat_alloc==0) then
          allocate(work(lwork), stat=stat_alloc)
       end if
@@ -183,7 +199,15 @@ subroutine mchrg_dsytrf(amat, ipiv, uplo, info)
    lwork = -1_ik
    call lapack_sytrf(ula, n, amat, lda, ipiv, test, lwork, stat)
    if (stat == 0) then
-      lwork = nint(test(1))
+      ! See mchrg_ssytrf's comment just above this same pattern: the
+      ! vendored OpenBLAS dsytrf's workspace query underestimates the
+      ! real call's actual write for some (data-dependent, not just
+      ! n-dependent) inputs - reproduced here exactly (caffeine EEQ
+      ! charge solve, n=25, query said lwork=300, real call reported
+      ! stat=0 and a normal work(300), corruption already present past
+      ! it) via dftd4's r2scan-3c path under J=K=exact. Cheap, always-
+      ! safe padding, not a workaround for anything on OUR side.
+      lwork = nint(test(1)) * 3_ik + 1000_ik
       if (stat_alloc==0) then
          allocate(work(lwork), stat=stat_alloc)
       end if

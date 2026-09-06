@@ -32,7 +32,8 @@ character(64) :: ri_aux_basis
 logical       :: spherical, harris_guess, calc_force, vv10_nonself
 real(8)       :: mem_cap_gb
 logical       :: estimate_only
-integer       :: n_threads, verbose, scf_conv
+integer       :: n_threads, verbose
+character(16) :: scf_conv
 
 integer       :: atomchg(EI_MAXATOM)
 real(8)       :: x(EI_MAXATOM), y(EI_MAXATOM), z(EI_MAXATOM)
@@ -117,7 +118,7 @@ functional = 'PBE_PBE'; baselabel = 'def2svp'; ecplabel = ''; basedir = ''
 unit = 'angstrom'; xyzfile = ''
 J = 'RI'; K = 'cosx'; ri_aux_basis = ''
 spherical = .true.; harris_guess = .true.; calc_force = .true.; vv10_nonself = .false.
-mem_cap_gb = 0.0d0; estimate_only = .false.; n_threads = 0; verbose = 1; scf_conv = 0
+mem_cap_gb = 0.0d0; estimate_only = .false.; n_threads = 0; verbose = 1; scf_conv = 'regular'
 atomchg = 0; x = 0.0d0; y = 0.0d0; z = 0.0d0
 atom_basis = ''; atom_ecp = ''
 npc = 0; pc_q = 0.0d0; pc_x = 0.0d0; pc_y = 0.0d0; pc_z = 0.0d0
@@ -260,7 +261,22 @@ spec%mem_cap_gb = mem_cap_gb
 spec%estimate_only = estimate_only
 spec%n_threads = n_threads
 spec%verbose = verbose
-spec%scf_conv_level = scf_conv
+block
+   character(16) :: sc
+   sc = adjustl(scf_conv)
+   select case (trim(sc))
+   case ('regular', 'Regular', 'REGULAR', '')
+      spec%scf_conv_level = 0
+   case ('fine', 'Fine', 'FINE')
+      spec%scf_conv_level = 1
+   case ('tight', 'Tight', 'TIGHT')
+      spec%scf_conv_level = 2
+   case default
+      write(*,'(A)') "Input error: scf_conv = '"//trim(sc)// &
+           "' not recognized (use regular / fine / tight)"
+      stop 1
+   end select
+end block
 
 allocate(spec%atomchg(ncenters), spec%x(ncenters), spec%y(ncenters), spec%z(ncenters))
 allocate(spec%atom_basis(ncenters), spec%atom_ecp(ncenters))
@@ -428,6 +444,21 @@ if (l > 4) then
    enddo
    is_gaussian_extension = (ext == '.com' .or. ext == '.gjf')
 endif
+end function
+
+logical function has_extension(name, ext)
+character(len=*), intent(in) :: name, ext
+integer :: l, le, i, ic
+character(len=16) :: tail
+has_extension = .false.
+l = len_trim(name); le = len_trim(ext)
+if (le < 1 .or. le > 16 .or. l <= le) return
+tail = name(l-le+1:l)
+do i = 1, le
+   ic = ichar(tail(i:i))
+   if (ic >= ichar('A') .and. ic <= ichar('Z')) tail(i:i) = char(ic + 32)
+enddo
+has_extension = (tail(1:le) == ext(1:le))
 end function
 
 function make_outfile_name(name) result(outname)

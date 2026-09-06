@@ -93,64 +93,87 @@ Other methods, documented in their own sections below:
 ## Input file format
 
 
-Fortran namelist; see `examples/friendly_format/`, `examples/drug_molecules/`,
-`examples/benchmark_accuracy/`, `examples/solvation/`, and `examples/misc/`
-for working examples spanning water up to a ~100-basis-function alkane -
-`examples/README.md` explains how the directories are grouped. The
-namelist terminator can be either `/` or `&end`.
+Fortran namelist. Working examples: `examples/friendly_format/`,
+`examples/drug_molecules/`, `examples/benchmark_accuracy/`,
+`examples/solvation/`, `examples/misc/` (`examples/README.md` groups them).
+Namelist terminator is `/` or `&end`.
 
 ```
 &molecule
- ncenters   = <number of atoms>
- imult      = <spin multiplicity, 2S+1 - 1 for closed-shell singlet>
- icharge    = <total molecular charge>
- functional = 'HF'                 plain Hartree-Fock, no XC functional
-              'B3LYP' / 'B3LYP_HYB' B3LYP hybrid GGA
-              'WB97M-V'             range-separated hybrid meta-GGA + VV10
-                                    (see docs/ENVIRONMENT.md)
-              anything else (e.g. 'PBE_PBE') falls through to a plain
-              PBE GGA (PBE exchange + PBE correlation, no HF exchange)
- baselabel  = '6-31g'              basis set label - must match a
-              "<atomic-number>-<baselabel>" block in data/bases
- J          = 'exact' / 'RI'       [optional, default 'exact'] Coulomb
-              build mode, for BOTH the SCF energy and the analytic
-              force/gradient
- K          = 'exact' / 'RI' / 'cosx'  [optional, default 'exact']
-              exchange build mode, independent of J - the real RIJCOSX
-              recipe is J='RI', K='cosx', not a package deal
- ri_aux_basis = 'ccpvdzjkfit'      [optional, default '' = auto-generated
-              even-tempered auxiliary basis] set to load a real published
-              fitting basis from data/bases instead - only cc-pVDZ-JKFIT
-              (H/C/N/O/S) is bundled today
- calc_force = .true. / .false.     [optional, default .true.]
- spherical  = .true. / .false.     [optional, default .true.] spherical
-              (puream) vs Cartesian Gaussians - see "Basis sets" below
- mem_cap_gb = <real>               [optional, default 0.0 = auto memory
-              budget, see mod_meminfo.f90]
- estimate_only = .true. / .false.  [optional, default .false.] skip SCF/
-              force entirely, just report the mem_grid_gb/mem_2e_gb
-              memory estimates below
- n_threads  = <integer>            [optional, default 0 = leave
-              OMP_NUM_THREADS/the OpenMP default thread count alone]
- resp_charges_on = .true./.false.  [optional, default .false.] compute
-              two-stage RESP (restrained ESP-fit) atomic charges after
-              the SCF converges - see "RESP charges" below
+ functional = 'B3LYP'
+ baselabel  = 'def2svp'
 &end
 &atoms
- O    0.000000    0.000000    0.000000
- H    0.758400    0.000000    0.586100
- H   -0.758400    0.000000    0.586100
+ O    0.000000   0.000000   0.000000
+ H    0.758400   0.000000   0.586100
+ H   -0.758400   0.000000   0.586100
 &end
 ```
 
-(`&atoms` column format, recommended: one atom per line, `element x y z`,
-coordinates in Angstrom, no commas/quotes. `ncenters` is inferred from
-the line count if left unset. `examples/run_engine.f90`'s own header
-comment documents two more input styles: the original namelist array
-form (`atomchg`/`x`/`y`/`z` as comma-separated arrays, still
-backward-compatible) and an external `xyzfile`. It also documents the
-optional `&professional` namelist for advanced performance tuning - see
-docs/ENVIRONMENT.md.)
+Everything except a geometry has a default (shown below), so a minimal
+input is just `functional` + `baselabel` + `&atoms`.
+
+**`&molecule`**
+
+| tag | default | meaning |
+|---|---|---|
+| `functional` | `'PBE_PBE'` | `'HF'`, `'B3LYP'`, `'PBE0'`, `'WB97M-V'`, … (full list under "Supported functionals and methods" above); unknown name falls back to plain PBE |
+| `baselabel` | `'def2svp'` | global basis; must match a `<Z>-<label>` block in `data/bases` |
+| `ecplabel` | `''` | global ECP; `''` = whatever the basis file carries |
+| `imult` | `1` | spin multiplicity 2S+1 (1 = closed-shell singlet) |
+| `icharge` | `0` | total charge |
+| `J` | `'RI'` | Coulomb build: `'exact'` or `'RI'` |
+| `K` | `'cosx'` | exchange build: `'exact'`, `'RI'`, or `'cosx'`; independent of `J` (default `RI`+`cosx` = RIJCOSX) |
+| `ri_aux_basis` | `''` | aux basis for the RI path; `''` = auto even-tempered. Bundled: cc-pVDZ/TZ/QZ-JKFIT, def2-universal-JFIT/JKFIT |
+| `calc_force` | `.true.` | also compute the analytic gradient |
+| `spherical` | `.true.` | spherical (puream) vs Cartesian Gaussians |
+| `scf_conv` | `'regular'` | `'regular'` (dE 1e-6 / dRMS 1e-5), `'fine'` (1e-8 / 1e-7), `'tight'` (1e-9 / 1e-8) |
+| `vv10_nonself` | `.false.` | evaluate VV10 non-local correlation post-SCF instead of every cycle |
+| `mem_cap_gb` | `0.0` | soft memory budget, GB; `0.0` = auto-detect |
+| `estimate_only` | `.false.` | skip SCF/force, just print the memory estimate |
+| `n_threads` | `0` | OpenMP threads; `0` = leave `OMP_NUM_THREADS` alone |
+| `verbose` | `1` | `0` quiet, `1` normal, `2` debug |
+| `resp_charges_on` | `.true.` | two-stage RESP atomic charges after SCF (see "RESP charges") |
+| `ncenters` | `0` | atom count; `0` = infer from `&atoms` line count |
+| `unit` | `'angstrom'` | `'angstrom'` or `'bohr'` (applies to `&atoms`) |
+| `basedir` | `''` | directory to resolve `data/` against; `''` = built-in |
+| `xyzfile` | `''` | read geometry from this `.xyz` instead of `&atoms` |
+
+**`&atoms`** — one atom per line `element x y z` (no commas/quotes). Two
+other accepted forms: namelist arrays `atomchg` / `x` / `y` / `z`, or an
+external `xyzfile`. Per-atom overrides: `atom_basis(i)` / `atom_ecp(i)`
+(`''` in a slot = use the global label).
+
+**`&pointcharges`** (QM/MM) — `npc` (count), then arrays `pc_q` / `pc_x` /
+`pc_y` / `pc_z`.
+
+**`&checkpoint`** — `chk_read` / `chk_write` (`.false.`), `chk_file` (`''`):
+density-matrix warm start to/from a file.
+
+**`&molden`** — `molden_write` / `molden_read` (`.false.`), `molden_file` /
+`molden_read_file` (`''`).
+
+**`&cosmo`** (implicit solvation; all inert unless `cosmo_on`)
+
+| tag | default | meaning |
+|---|---|---|
+| `cosmo_on` | `.false.` | enable COSMO |
+| `cosmo_solvent` | `''` | named solvent (`'water'`, …); sets the dielectric |
+| `cosmo_epsilon` | `78.4` | dielectric (ignored if `cosmo_solvent` set) |
+| `cosmo_radii_scale` | `1.2` | Bondi-radius multiplier for the cavity |
+| `cosmo_avg_area` | `0.3` | target tessera area, Å² |
+| `cosmo_cavity_type` | `'gepol'` | only `'gepol'` (has an analytic force) |
+| `cosmo_smd` | `.false.` | add the SMD non-electrostatic term (needs `gepol`) |
+| `cosmo_rsolv` | `0.0` | solvent probe radius |
+| `cosmo_sigma_rav` | `0.5` | σ-profile averaging radius, Å |
+| `cosmo_sigma_profile_file` | `''` | write a σ-profile here |
+| `cosmo_ks_nseg` / `cosmo_ks_nface` | `92` / `1082` | Klamt-surface segmentation |
+
+**`&cosmors`** — `cosmors_cosmo_file` / `cosmors_compound_name` (`''` = derive
+from the input name): write a COSMO-RS `.cosmo` file.
+
+**`&professional`** — advanced performance tuning (XC grid cache, COSX grid
+density, …); see `docs/ENVIRONMENT.md`.
 
 
 ## ECP (effective core potential) and per-atom basis/ECP override

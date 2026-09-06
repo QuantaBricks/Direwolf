@@ -224,6 +224,12 @@ if (l > 4) then
       return
    endif
 endif
+if (l > 5) then
+   if (name(l-4:l) == '.toml') then
+      outname = name(1:l-5) // '.out'
+      return
+   endif
+endif
 outname = trim(name) // '.out'
 end function
 

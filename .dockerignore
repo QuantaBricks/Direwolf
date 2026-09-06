@@ -10,7 +10,24 @@ benchmark
 test
 docs
 report
-build
-*.mod
-*.o
 fort.*
+
+# Build artifacts. Docker's .dockerignore does NOT treat a bare "build"
+# as "match at every level" the way .gitignore does, so each artifact
+# path is listed explicitly. If these get COPY'd in, a from-scratch
+# `make` inside the image finds a stale, wrong-arch libxcf03.a / *.mod
+# already in place and skips rebuilding - cross-arch builds (e.g. armv7
+# on an x86 host) then fail with "Type mismatch ... INTEGER(4) to
+# INTEGER(8)" from the leftover x86 libxc .mod.
+#
+# NOTE: do NOT use "**/build" here - it also matches the real vendored
+# source directory third_party/toml-f/src/tomlf/build/, whose removal
+# breaks toml-f's cmake ("add_subdirectory given source 'build' which is
+# not an existing directory"). The anchored "third_party/*/build" hits
+# only the one-level cmake build dirs the vendored libs actually use.
+/build
+third_party/*/build
+third_party/_install
+third_party/OpenBLAS/*.a
+**/*.mod
+**/*.o

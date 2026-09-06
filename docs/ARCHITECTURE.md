@@ -38,8 +38,9 @@ memory-estimation mode) are ordinary arguments, not env vars -
 `j_mode`/`k_mode`/`ri_aux_basis`/`do_force`/`mem_cap_gb`/`estimate_only`,
 set by the driver from the `&molecule` namelist's `J`/`K`/`ri_aux_basis`/
 `calc_force`/`mem_cap_gb`/`estimate_only` fields (`examples/run_engine.f90`),
-all optional with backward-compatible defaults (J/K exact, force on, no
-memory cap, not estimate-only) so existing `.inp` files are unaffected.
+all optional with sensible defaults (J/K = RI-J + COSX-K i.e. RIJCOSX,
+force on, no memory cap, not estimate-only); an `.inp` that wants the
+old conventional path sets `J='exact' K='exact'` explicitly.
 Plain HF is requested via `functional = 'HF'` (mod_xc.f90's
 `xc_select_functional`), same as any other functional string - no
 separate flag needed.
