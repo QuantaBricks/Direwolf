@@ -28,6 +28,7 @@ real(8),allocatable :: Ka_local(:,:), Kb_local(:,:)
 real(8),allocatable :: Qb(:,:)
 real(8),allocatable :: F_gmax(:)
 integer :: nrad_lo, nsph_lo, nrad_md, nsph_md, nrad_hi, nsph_hi, npts, envstat
+integer,allocatable :: cosx_atom_scratch(:)
 logical :: nrad_lo_explicit, nrad_md_explicit, nrad_hi_explicit
 character(len=16) :: envchar
 real(8),pointer :: coor_p(:,:), w_p(:), Qfull_p(:,:)
@@ -67,7 +68,7 @@ real(8) :: bet
 real(8),allocatable :: Xc(:,:), Kc(:,:)
 real(8),pointer,contiguous :: QfullT_p(:,:)
 
-if (.not. cosx_ready .or. cosx_nBases_cached .ne. nBases) then
+if (.not. cosx_ready .or. cosx_needs_rebuild .or. cosx_nBases_cached .ne. nBases) then
    call cosx_build_shared(nConts)
 
    nrad_hi = 18
@@ -99,16 +100,17 @@ if (.not. cosx_ready .or. cosx_nBases_cached .ne. nBases) then
    if (allocated(cosx_blkptr_hi)) deallocate(cosx_blkptr_hi,cosx_blkidx_hi)
    if (allocated(cosx_blkcen_hi)) deallocate(cosx_blkcen_hi,cosx_blkrad_hi)
    if (allocated(cosx_blkstart_hi)) deallocate(cosx_blkstart_hi)
+   if (allocated(cosx_atom_hi)) deallocate(cosx_atom_hi)
    if (nrad_hi_explicit) then
       call cosx_build_one_grid(nConts, nrad_hi, nsph_hi, cosx_coor_hi, cosx_w_hi, cosx_npts_hi, cosx_Qfull_hi, &
                                 cosx_blkptr_hi, cosx_blkidx_hi, cosx_blkcen_hi, cosx_blkrad_hi, &
                                 cosx_QfullT_hi, cosx_blkstart_hi, cosx_nblk_hi, &
-                                per_atom_period_scale=.true.)
+                                per_atom_period_scale=.true., atom_of_out=cosx_atom_hi)
    else
       call cosx_build_one_grid(nConts, nrad_hi, nsph_hi, cosx_coor_hi, cosx_w_hi, cosx_npts_hi, cosx_Qfull_hi, &
                                 cosx_blkptr_hi, cosx_blkidx_hi, cosx_blkcen_hi, cosx_blkrad_hi, &
                                 cosx_QfullT_hi, cosx_blkstart_hi, cosx_nblk_hi, &
-                                per_atom_period_scale=.true., intacc_eps=4.338d0)
+                                per_atom_period_scale=.true., intacc_eps=4.338d0, atom_of_out=cosx_atom_hi)
    endif
    if (allocated(cosx_coor_md)) deallocate(cosx_coor_md,cosx_w_md,cosx_Qfull_md)
    if (allocated(cosx_QfullT_md)) deallocate(cosx_QfullT_md)
@@ -119,12 +121,12 @@ if (.not. cosx_ready .or. cosx_nBases_cached .ne. nBases) then
       call cosx_build_one_grid(nConts, nrad_md, nsph_md, cosx_coor_md, cosx_w_md, cosx_npts_md, cosx_Qfull_md, &
                                 cosx_blkptr_md, cosx_blkidx_md, cosx_blkcen_md, cosx_blkrad_md, &
                                 cosx_QfullT_md, cosx_blkstart_md, cosx_nblk_md, &
-                                per_atom_period_scale=cosx_peratom_lomd)
+                                per_atom_period_scale=cosx_peratom_lomd, atom_of_out=cosx_atom_scratch)
    else
       call cosx_build_one_grid(nConts, nrad_md, nsph_md, cosx_coor_md, cosx_w_md, cosx_npts_md, cosx_Qfull_md, &
                                 cosx_blkptr_md, cosx_blkidx_md, cosx_blkcen_md, cosx_blkrad_md, &
                                 cosx_QfullT_md, cosx_blkstart_md, cosx_nblk_md, intacc_eps=4.020d0, &
-                                per_atom_period_scale=cosx_peratom_lomd)
+                                per_atom_period_scale=cosx_peratom_lomd, atom_of_out=cosx_atom_scratch)
    endif
    if (allocated(cosx_coor_lo)) deallocate(cosx_coor_lo,cosx_w_lo,cosx_Qfull_lo)
    if (allocated(cosx_QfullT_lo)) deallocate(cosx_QfullT_lo)
@@ -135,12 +137,12 @@ if (.not. cosx_ready .or. cosx_nBases_cached .ne. nBases) then
       call cosx_build_one_grid(nConts, nrad_lo, nsph_lo, cosx_coor_lo, cosx_w_lo, cosx_npts_lo, cosx_Qfull_lo, &
                                 cosx_blkptr_lo, cosx_blkidx_lo, cosx_blkcen_lo, cosx_blkrad_lo, &
                                 cosx_QfullT_lo, cosx_blkstart_lo, cosx_nblk_lo, &
-                                per_atom_period_scale=cosx_peratom_lomd)
+                                per_atom_period_scale=cosx_peratom_lomd, atom_of_out=cosx_atom_scratch)
    else
       call cosx_build_one_grid(nConts, nrad_lo, nsph_lo, cosx_coor_lo, cosx_w_lo, cosx_npts_lo, cosx_Qfull_lo, &
                                 cosx_blkptr_lo, cosx_blkidx_lo, cosx_blkcen_lo, cosx_blkrad_lo, &
                                 cosx_QfullT_lo, cosx_blkstart_lo, cosx_nblk_lo, intacc_eps=3.816d0, &
-                                per_atom_period_scale=cosx_peratom_lomd)
+                                per_atom_period_scale=cosx_peratom_lomd, atom_of_out=cosx_atom_scratch)
    endif
 
    print '(A,I0,A,I0,A,I0)', "  COSX grid points: hi=",cosx_npts_hi," md=",cosx_npts_md," lo=",cosx_npts_lo
@@ -171,6 +173,7 @@ if (.not. cosx_ready .or. cosx_nBases_cached .ne. nBases) then
    cosx_G_hi_valid = .false.
    cosx_G_hi_valid_lr = .false.
    cosx_ready = .true.
+   cosx_needs_rebuild = .false.
 endif
 
 cosx_call_count = cosx_call_count + 1
@@ -198,9 +201,10 @@ endif
 stage_changed = (stage_now .ne. cosx_stage_prev)
 do_incremental = cosx_incr_valid .and. (.not. stage_changed) .and. (cosx_stage_settle .eq. 0) &
                   .and. (.not. cosx_no_incremental)
-kscreen_use = merge(cosx_kscreen_incr, cosx_kscreen, do_incremental)
+kscreen_use = merge(cosx_kscreen_incr_value(cosx_kscreen_incr), cosx_kscreen, do_incremental)
 cosx_G_hi_valid = .false.
 is_full_hi_build = need_force .and. (.not. do_incremental) .and. (stage_now .eq. 3)
+cosx_need_force_hi = need_force
 if (is_full_hi_build) then
    if (allocated(cosx_G_hi_a)) then
       if (size(cosx_G_hi_a,1) .ne. npts .or. size(cosx_G_hi_a,2) .ne. nConts) then

@@ -268,8 +268,12 @@ else if (engine_use_df) then
       else
          engine_df_aux_basis = 'def2universaljfit'
       endif
-      if (.not. aux_basis_covers_all_atoms(trim(engine_df_aux_basis), ncenters, atomchg)) &
-         engine_df_aux_basis = ""
+      if (.not. aux_basis_covers_all_atoms(trim(engine_df_aux_basis), ncenters, atomchg)) then
+         write(*,'(A)') ' [FATAL] no published RI auxiliary basis covers every element in this'// &
+                        ' molecule (tried def2-universal-J/JKFIT). Set ri_aux_basis explicitly'// &
+                        ' or run with J=''exact''.'
+         stop 1
+      endif
    endif
 else
    engine_df_aux_basis = ""
@@ -495,26 +499,31 @@ if (HF_exchange_frac .lt. 1.0d0) then
             xcgrid_level = xcgrid_active_fine
             xcgrid_refined = .true.
          endif
-         call get_environment_variable("ENGINE_VV10_DYNGRID", dyngridenv)
-         if (len_trim(dyngridenv) .gt. 0) then
-            vv10_dynamic = (trim(dyngridenv) .eq. "1") .and. .not. engine_vv10_nonself
-            if (trim(dyngridenv) .eq. "1" .and. engine_vv10_nonself) &
-               print *,"ENGINE_VV10_DYNGRID ignored: not compatible with vv10_nonself"
+         if (xc_uses_vv10()) then
+            call get_environment_variable("ENGINE_VV10_DYNGRID", dyngridenv)
+            if (len_trim(dyngridenv) .gt. 0) then
+               vv10_dynamic = (trim(dyngridenv) .eq. "1") .and. .not. engine_vv10_nonself
+               if (trim(dyngridenv) .eq. "1" .and. engine_vv10_nonself) &
+                  print *,"ENGINE_VV10_DYNGRID ignored: not compatible with vv10_nonself"
+            else
+               vv10_dynamic = (nconts .gt. VV10_DYNGRID_NCONTS) .and. .not. engine_vv10_nonself
+               if (vv10_dynamic) print *,"VV10 delayed self-consistent switch by default: nconts=",nconts, &
+                    " >",VV10_DYNGRID_NCONTS," (override with ENGINE_VV10_DYNGRID=0)"
+            endif
+            vv10_active_now = (.not. vv10_dynamic) .or. has_warm_start
+            vv10_just_activated = .false.
+            vv10_flush_on_switch = .true.
+            if (vv10_dynamic .and. .not. has_warm_start) then
+               call get_environment_variable("ENGINE_VV10_DYNGRID_PRMS", dyngridenv)
+               if (len_trim(dyngridenv) .gt. 0) read(dyngridenv,*) vv10_switch_prms
+               call get_environment_variable("ENGINE_VV10_DYNGRID_NOFLUSH", dyngridenv)
+               if (len_trim(dyngridenv) .gt. 0) vv10_flush_on_switch = (trim(dyngridenv) .ne. "1")
+               print *,"VV10 dynamic: starts OFF, activates self-consistently at dP <",vv10_switch_prms, &
+                       " flush_on_switch=",vv10_flush_on_switch
+            endif
          else
-            vv10_dynamic = (nconts .gt. VV10_DYNGRID_NCONTS) .and. .not. engine_vv10_nonself
-            if (vv10_dynamic) print *,"VV10 delayed self-consistent switch by default: nconts=",nconts, &
-                 " >",VV10_DYNGRID_NCONTS," (override with ENGINE_VV10_DYNGRID=0)"
-         endif
-         vv10_active_now = (.not. vv10_dynamic) .or. has_warm_start
-         vv10_just_activated = .false.
-         vv10_flush_on_switch = .true.
-         if (vv10_dynamic .and. .not. has_warm_start) then
-            call get_environment_variable("ENGINE_VV10_DYNGRID_PRMS", dyngridenv)
-            if (len_trim(dyngridenv) .gt. 0) read(dyngridenv,*) vv10_switch_prms
-            call get_environment_variable("ENGINE_VV10_DYNGRID_NOFLUSH", dyngridenv)
-            if (len_trim(dyngridenv) .gt. 0) vv10_flush_on_switch = (trim(dyngridenv) .ne. "1")
-            print *,"VV10 dynamic: starts OFF, activates self-consistently at dP <",vv10_switch_prms, &
-                    " flush_on_switch=",vv10_flush_on_switch
+            vv10_dynamic    = .false.
+            vv10_active_now = .true.
          endif
       end block
       if (engine_verbose .ge. 2) then
@@ -923,7 +932,7 @@ end subroutine EngineUp
 subroutine reset_engine_state()
 use MOL_info
 use GRID_info
-use mod_integrals, only: integrals_finalize
+use mod_integrals, only: integrals_finalize, cosx_needs_rebuild
 use mod_cosmo, only: cosmo_finalize
 use mod_vv10, only: vv10_nlc_grid_reset
 implicit none
@@ -954,6 +963,7 @@ nPointCharges = 0
 E = 0
 E_rep = 0
 call integrals_finalize()
+cosx_needs_rebuild = .true.
 end subroutine reset_engine_state
 
 integer function ecp_core_electrons_prescan(base_label)

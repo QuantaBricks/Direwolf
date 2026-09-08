@@ -28,6 +28,7 @@ real(8),allocatable :: Ka_local(:,:), Kb_local(:,:)
 real(8),allocatable :: Qb(:,:)
 real(8),allocatable :: F_gmax(:)
 integer :: npts
+logical :: is_full_hi_build_lr
 real(8),pointer :: coor_p(:,:), w_p(:), Qfull_p(:,:)
 integer,pointer :: cosx_blkptr_p(:), cosx_blkidx_p(:)
 integer,pointer :: blkstart_p(:)
@@ -137,7 +138,16 @@ endif
 stage_changed = (stage_now .ne. cosx_stage_prev_lr)
 do_incremental = cosx_incr_valid_lr .and. (.not. stage_changed) .and. (cosx_stage_settle_lr .eq. 0) &
                   .and. (.not. cosx_no_incremental) .and. (.not. cosx_no_incremental_lr)
-kscreen_use_lr = merge(cosx_kscreen_incr_lr, cosx_kscreen_lr, do_incremental)
+kscreen_use_lr = merge(cosx_kscreen_incr_value(cosx_kscreen_incr_lr), cosx_kscreen_lr, do_incremental)
+cosx_G_hi_valid_lr = .false.
+is_full_hi_build_lr = cosx_need_force_hi .and. (.not. do_incremental) .and. (stage_now .eq. 3)
+if (is_full_hi_build_lr) then
+   if (allocated(cosx_G_hi_a_lr)) then
+      if (size(cosx_G_hi_a_lr,1) .ne. npts .or. size(cosx_G_hi_a_lr,2) .ne. nConts) &
+         deallocate(cosx_G_hi_a_lr,cosx_G_hi_b_lr)
+   endif
+   if (.not. allocated(cosx_G_hi_a_lr)) allocate(cosx_G_hi_a_lr(npts,nConts), cosx_G_hi_b_lr(npts,nConts))
+endif
 if (do_incremental) then
    allocate(Da_eff(nConts,nConts), Db_eff(nConts,nConts))
    Da_eff = Da - cosx_D_incr_a_lr
@@ -410,6 +420,11 @@ do ib = 0,nblocks-1
       enddo
    enddo
 
+   if (is_full_hi_build_lr) then
+      cosx_G_hi_a_lr(bstart:bstart+nb-1,:) = Ga
+      cosx_G_hi_b_lr(bstart:bstart+nb-1,:) = Gb
+   endif
+
    ntrun = 0
    do it = 0,nBases-1
       if (.not. tau_hit(it)) cycle
@@ -532,6 +547,7 @@ else if (cosx_stage_settle_lr .gt. 0) then
    cosx_stage_settle_lr = cosx_stage_settle_lr - 1
 endif
 cosx_stage_prev_lr = stage_now
+if (is_full_hi_build_lr) cosx_G_hi_valid_lr = .true.
 deallocate(Da_eff, Db_eff)
 if (allocated(D_pair_max)) deallocate(D_pair_max)
 if (allocated(D_weighted_max)) deallocate(D_weighted_max)

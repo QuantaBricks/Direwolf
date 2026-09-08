@@ -31,6 +31,13 @@ type :: engine_input_t
    integer       :: verbose = 1
    integer       :: scf_conv_level = 0
 
+   logical       :: opt_run = .false.
+   integer       :: opt_maxcyc = 100
+   integer       :: opt_conv_level = 0
+   real(8)       :: opt_trust = 0.3d0
+   character(16) :: opt_coord = 'ric'
+   logical       :: opt_restart = .true.
+
    integer, allocatable       :: atomchg(:)
    real(8), allocatable       :: x(:), y(:), z(:)
    character(30), allocatable :: atom_basis(:), atom_ecp(:)

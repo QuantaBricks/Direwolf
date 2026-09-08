@@ -13,7 +13,7 @@ real(8),intent(inout) :: Fa(nconts,nconts),Fb(nconts,nconts)
 real(8),intent(in) :: Pa(nconts,nconts),Pb(nconts,nconts)
 real(8),intent(in) :: S(nconts,nconts),X(nconts,nconts)
 integer,intent(inout) :: diis_n
-real(4),intent(inout) :: diis_Fa(nconts,nconts,DIIS_MAX),diis_Fb(nconts,nconts,DIIS_MAX)
+real(8),intent(inout) :: diis_Fa(nconts,nconts,DIIS_MAX),diis_Fb(nconts,nconts,DIIS_MAX)
 real(4),intent(inout) :: diis_Pa(nconts,nconts,DIIS_MAX),diis_Pb(nconts,nconts,DIIS_MAX)
 real(4),intent(inout) :: diis_ea(nconts,nconts,DIIS_MAX),diis_eb(nconts,nconts,DIIS_MAX)
 logical,intent(in) :: diis_debug

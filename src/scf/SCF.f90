@@ -23,8 +23,6 @@ INCLUDE 'parameter.h'
     logical,intent(in) :: do_force
     integer    :: iter,iconv
     integer    :: i,j,k,n,m,info,info_sol
-    integer    :: elock_streak
-    real(8)    :: plateau_prms_max
     real(8)    :: E_n
     real(8)    :: Exc
     real(8)    :: Prms
@@ -40,14 +38,13 @@ INCLUDE 'parameter.h'
     logical    :: diis_debug
     character(len=8) :: diis_dbg_env
     character(len=32) :: diis_env
-    real(4),allocatable :: diis_Fa(:,:,:),diis_Fb(:,:,:)
+    real(8),allocatable :: diis_Fa(:,:,:),diis_Fb(:,:,:)
     real(4),allocatable :: diis_Pa(:,:,:),diis_Pb(:,:,:)
     real(4),allocatable :: diis_ea(:,:,:),diis_eb(:,:,:)
 
     integer(8) :: wc1,wc2,wc6,wc_rate
     iter = 1
     iconv = 0
-    elock_streak = 0
     Prms = 0.0d0
     call system_clock(count_rate=wc_rate)
     call scf_hist_reset()
@@ -184,19 +181,6 @@ INCLUDE 'parameter.h'
 
         deallocate(Pc)
         econv_out = abs(E_n+E_rep-E)
-        if (econv_out.le.3.0d0*Emax) then
-           elock_streak = elock_streak + 1
-        else
-           elock_streak = 0
-        endif
-        plateau_prms_max = merge(30.0d0, 0.0d0, cosx_enabled) * Pmax
-        if (econv_out.le.3.0d0*Emax .and. Prms.gt.Pmax .and. Prms.le.plateau_prms_max &
-            .and. elock_streak.ge.8) then
-           print '("Convergence: dE=",ES10.3," Hartree, dP=",ES10.3," (energy plateau; dP noise in near-degenerate manifold)")', &
-                 E_n+E_rep-E, Prms
-           Prms = Pmax
-           econv_out = Emax
-        endif
         if (econv_out.le.Emax .and. Prms.le.Pmax  ) then
              print '("Convergence: dE=",ES10.3," Hartree, dP=",ES10.3)',E_n+E_rep-E,Prms
             if (cosx_enabled .and. .not. cosx_force_hi_grid) then

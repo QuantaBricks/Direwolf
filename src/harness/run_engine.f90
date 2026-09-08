@@ -15,6 +15,8 @@ use mod_version, only: engine_version, engine_git_version
 use mod_vv10, only: vv10_report
 use mod_checkpoint, only: checkpoint_read, checkpoint_write
 use mod_engineup_interface, only: EngineUp
+use mod_engine_results, only: write_results_block
+use mod_geomopt, only: geomopt_run
 implicit none
 
 type(engine_input_t) :: spec
@@ -106,6 +108,22 @@ if (spec%chk_read) then
    end block
 endif
 
+if (spec%opt_run) then
+   if (out_unit == 11) then
+      open(unit=11, file=trim(outfile), status='replace', action='write')
+      write(11, '(A,A)') 'Direwolf version     = ', engine_version
+      write(11, '(A,A)') 'Build                = ', engine_git_version
+   endif
+   call geomopt_run(spec, outfile, out_unit)
+   if (out_unit == 11) close(11)
+   if (out_unit == 6) then
+      close(6)
+      call normalize_output_indentation(outfile)
+   endif
+   print *, 'Done. Output written to ', trim(outfile)
+   stop
+endif
+
 call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
               coord_a, atomchg_a, spec%baselabel, spec%ecplabel, &
               spec%atom_basis, spec%atom_ecp, &
@@ -130,29 +148,7 @@ if (out_unit == 11) then
    write(11, '(A,A)')        'Build                = ', engine_git_version
 endif
 if (.not. spec%estimate_only) then
-   write(out_unit, '(A, A)')       'converged            = ', merge('Yes','No ', iconv .eq. 1)
-   write(out_unit, '(A, F20.9)')   'Total Energy (Hartree)  = ', energy_out
-   block
-      use mod_scf_history, only: scf_hist_last_exc, scf_hist_last_ecoul, &
-         scf_hist_last_exact_exchange, scf_hist_last_hcore, scf_hist_last_erep
-      write(out_unit, '(A, F20.9)') 'Hcore trace (Hartree)   = ', scf_hist_last_hcore()
-      write(out_unit, '(A, F20.9)') 'Ecoul (Hartree)         = ', scf_hist_last_ecoul()
-      write(out_unit, '(A, F20.9)') 'Exact exchange (Hartree)= ', scf_hist_last_exact_exchange()
-      write(out_unit, '(A, F20.9)') 'Exc (Hartree)           = ', scf_hist_last_exc()
-      write(out_unit, '(A, F20.9)') 'Nuclear repulsion (Ha)  = ', scf_hist_last_erep()
-   end block
-   block
-      logical :: vv10_used
-      real(8) :: vv10_enl
-      call vv10_report(vv10_enl, vv10_used)
-      if (vv10_used) write(out_unit, '(A, F20.9)') 'VV10 NLC Energy (Hartree) = ', vv10_enl
-   end block
-   if (spec%calc_force) then
-      write(out_unit, '(A)')         'forces(hartree/bohr):'
-      do i = 1, spec%ncenters
-         write(out_unit, '(3F18.9)') force_out(i, :)
-      enddo
-   endif
+   call write_results_block(out_unit, spec%ncenters, energy_out, force_out, iconv, spec%calc_force)
    if (out_unit == 6) then
       write(out_unit, '(A)') '[RESULTSEND]'
       write(out_unit, '(A)') ''

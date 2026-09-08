@@ -331,7 +331,7 @@ Feff = Hcore_l
 
 block
    real(8),allocatable :: X_l(:,:)
-   real(4),allocatable :: diis_Fa(:,:,:), diis_Fb(:,:,:)
+   real(8),allocatable :: diis_Fa(:,:,:), diis_Fb(:,:,:)
    real(4),allocatable :: diis_Pa(:,:,:), diis_Pb(:,:,:)
    real(4),allocatable :: diis_ea(:,:,:), diis_eb(:,:,:)
    integer :: DIIS_MAXl, diis_nl, multi_l

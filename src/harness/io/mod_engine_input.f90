@@ -34,6 +34,12 @@ real(8)       :: mem_cap_gb
 logical       :: estimate_only
 integer       :: n_threads, verbose
 character(16) :: scf_conv
+character(16) :: runtype
+
+integer       :: opt_maxcyc
+character(16) :: opt_conv, opt_coord
+real(8)       :: opt_trust
+logical       :: opt_restart
 
 integer       :: atomchg(EI_MAXATOM)
 real(8)       :: x(EI_MAXATOM), y(EI_MAXATOM), z(EI_MAXATOM)
@@ -87,7 +93,8 @@ end interface
 
 namelist /molecule/ ncenters, imult, icharge, functional, baselabel, ecplabel, basedir, unit, xyzfile, &
                      J, K, ri_aux_basis, spherical, harris_guess, calc_force, vv10_nonself, &
-                     mem_cap_gb, estimate_only, n_threads, verbose, scf_conv, resp_charges_on
+                     mem_cap_gb, estimate_only, n_threads, verbose, scf_conv, resp_charges_on, runtype
+namelist /opt/ opt_maxcyc, opt_conv, opt_trust, opt_coord, opt_restart
 namelist /pointcharges/ npc, pc_q, pc_x, pc_y, pc_z
 namelist /checkpoint/ chk_read, chk_write, chk_file
 namelist /molden/ molden_write, molden_file, molden_read, molden_read_file
@@ -119,6 +126,8 @@ unit = 'angstrom'; xyzfile = ''
 J = 'RI'; K = 'cosx'; ri_aux_basis = ''
 spherical = .true.; harris_guess = .true.; calc_force = .true.; vv10_nonself = .false.
 mem_cap_gb = 0.0d0; estimate_only = .false.; n_threads = 0; verbose = 1; scf_conv = 'regular'
+runtype = 'energy'
+opt_maxcyc = 100; opt_conv = 'normal'; opt_trust = 0.3d0; opt_coord = 'ric'; opt_restart = .true.
 atomchg = 0; x = 0.0d0; y = 0.0d0; z = 0.0d0
 atom_basis = ''; atom_ecp = ''
 npc = 0; pc_q = 0.0d0; pc_x = 0.0d0; pc_y = 0.0d0; pc_z = 0.0d0
@@ -159,6 +168,12 @@ if (found) then
          stop 1
       endif
    endif
+endif
+
+call find_namelist_block(lines, nlines, 'opt', buf, start, finish, found)
+if (found) then
+   read(buf, nml=opt)
+   runtype = 'opt'
 endif
 
 call find_namelist_block(lines, nlines, 'pointcharges', buf, start, finish, found)
@@ -277,6 +292,36 @@ block
       stop 1
    end select
 end block
+
+block
+   character(16) :: rt, oc
+   rt = adjustl(runtype)
+   select case (trim(rt))
+   case ('energy', 'Energy', 'ENERGY', 'sp', 'SP', '')
+      spec%opt_run = .false.
+   case ('opt', 'Opt', 'OPT', 'optimize', 'optimization')
+      spec%opt_run = .true.
+   case default
+      write(*,'(A)') "Input error: runtype = '"//trim(rt)// &
+           "' not recognized (use energy / opt)"
+      stop 1
+   end select
+   oc = adjustl(opt_conv)
+   select case (trim(oc))
+   case ('normal', 'Normal', 'NORMAL', 'regular', '')
+      spec%opt_conv_level = 0
+   case ('tight', 'Tight', 'TIGHT')
+      spec%opt_conv_level = 1
+   case default
+      write(*,'(A)') "Input error: opt_conv = '"//trim(oc)// &
+           "' not recognized (use normal / tight)"
+      stop 1
+   end select
+end block
+spec%opt_maxcyc  = opt_maxcyc
+spec%opt_trust   = opt_trust
+spec%opt_coord   = opt_coord
+spec%opt_restart = opt_restart
 
 allocate(spec%atomchg(ncenters), spec%x(ncenters), spec%y(ncenters), spec%z(ncenters))
 allocate(spec%atom_basis(ncenters), spec%atom_ecp(ncenters))
@@ -481,7 +526,7 @@ real(8), intent(inout) :: x(:), y(:), z(:)
 integer, intent(in) :: ncenters
 character(len=*), intent(in) :: unit
 
-real(8), parameter :: ans2bohr = 1.889725989d0
+real(8), parameter :: ans2bohr = 1.88972612456506d0
 integer :: i
 if (unit == 'bohr' .or. unit == 'Bohr' .or. unit == 'BOHR') then
    do i = 1, ncenters

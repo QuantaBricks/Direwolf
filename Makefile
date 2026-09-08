@@ -49,7 +49,7 @@ LIBXCDIR   = third_party/libxc
 tagCOMP    = -c -free -O3 -fopenmp -I$(DATADIR) -I$(LIBXCDIR)/build -J$(BUILDDIR)
 tagCOMPF77 = -c -O3 -fopenmp -I$(DATADIR) -J$(BUILDDIR)
 
-VPATH = src/main:src/harness:src/harness/io:src/harness/io/namelist:src/harness/io/xyz:src/harness/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
+VPATH = src/main:src/harness:src/harness/opt:src/harness/io:src/harness/io/namelist:src/harness/io/xyz:src/harness/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
 
 objects = $(BUILDDIR)/mod_data.o \
           $(BUILDDIR)/mod_profile.o \
@@ -143,7 +143,12 @@ io_objects = $(BUILDDIR)/mod_engine_input_types.o \
              $(BUILDDIR)/mod_engine_input_atoms_xyz.o \
              $(BUILDDIR)/mod_engine_input_atoms_column.o \
              $(BUILDDIR)/mod_engine_input.o \
-             $(BUILDDIR)/mod_engineup_interface.o
+             $(BUILDDIR)/mod_engineup_interface.o \
+             $(BUILDDIR)/mod_engine_results.o \
+             $(BUILDDIR)/mod_wilson_bvec.o \
+             $(BUILDDIR)/mod_lindh_hessian.o \
+             $(BUILDDIR)/mod_internal_coords.o \
+             $(BUILDDIR)/mod_geomopt.o
 
 
 all: Direwolf
@@ -428,7 +433,29 @@ $(BUILDDIR)/mod_engine_input.o: mod_engine_input.f90 $(BUILDDIR)/mod_engine_inpu
 
 $(BUILDDIR)/run_engine.o: run_engine.f90 $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_scf_history.o $(BUILDDIR)/mod_version.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/cosmo.o \
                           $(BUILDDIR)/mod_engine_input.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engine_input_block.o \
-                          $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_engineup_interface.o | $(BUILDDIR)
+                          $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_engineup_interface.o \
+                          $(BUILDDIR)/mod_engine_results.o $(BUILDDIR)/mod_geomopt.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+# Geometry optimizer (src/harness/opt): a multi-step driver over
+# EngineUp - Cartesian RFO / trust-radius quasi-Newton seeded by the
+# Lindh model Hessian. See mod_geomopt.f90's header. Harness-only, same
+# reasoning as io_objects itself.
+$(BUILDDIR)/mod_engine_results.o: mod_engine_results.f90 $(BUILDDIR)/mod_scf_history.o $(BUILDDIR)/mod_vv10.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+$(BUILDDIR)/mod_wilson_bvec.o: mod_wilson_bvec.f90 | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+$(BUILDDIR)/mod_lindh_hessian.o: mod_lindh_hessian.f90 $(BUILDDIR)/mod_wilson_bvec.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+$(BUILDDIR)/mod_internal_coords.o: mod_internal_coords.f90 $(BUILDDIR)/mod_wilson_bvec.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+$(BUILDDIR)/mod_geomopt.o: mod_geomopt.f90 $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engineup_interface.o \
+                          $(BUILDDIR)/mod_lindh_hessian.o $(BUILDDIR)/mod_internal_coords.o $(BUILDDIR)/mod_engine_results.o \
+                          $(BUILDDIR)/mod_engine_input_elements.o $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_profile.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 # Interface-only module for EngineUp (see mod_engineup_interface.f90's

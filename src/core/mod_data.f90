@@ -122,6 +122,7 @@ real(8),parameter :: XC_LEVEL_PRMS(XC_NLEVEL) = (/1.0d-3, 1.0d-4, 0.0d0/)
 type(BatchShellList),allocatable,target :: dft_batch_shells_lvl(:,:)
 integer :: max_dft_batch_nsig_loose = 0
 integer :: xc_geo_level = XC_NLEVEL
+integer,allocatable :: gridgen_nlc_atom_of(:)
 logical :: dft_loose_built = .false.
 
 integer,parameter :: XCGRID_COARSE = 2
@@ -214,7 +215,7 @@ real(8), parameter :: BR(103) = (/ &
 real(8), parameter :: XCGRID_M3_KROW(7) = &
    (/ 1.80d0, 1.40d0, 0.90d0, 0.75d0, 0.70d0, 0.65d0, 0.65d0 /)
 z = max(1, min(103, Zin))
-xi = XCGRID_M3_KROW(xcgrid_m3_row(z)) * BR(z) * 1.8897259886d0
+xi = XCGRID_M3_KROW(xcgrid_m3_row(z)) * BR(z) * 1.88972612456506d0
 end function xcgrid_m3_xi
 
 subroutine xcgrid_m3_radial(Zin, i, nrad, radr, radw)

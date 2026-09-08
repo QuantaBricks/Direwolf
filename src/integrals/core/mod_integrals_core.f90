@@ -696,6 +696,7 @@ end subroutine ensure_int2e_optimizer_lr
 module subroutine integrals_set_accuracy(prms)
     implicit none
     real(8),intent(in) :: prms
+    scf_prms_now = prms
     density_screen_cutoff = min(DENSITY_SCREEN_MAX, &
          max(DENSITY_SCREEN_INCR_FLOOR, prms*DENSITY_SCREEN_SCALE))
     density_screen_cutoff_incr = min(DENSITY_SCREEN_MAX, &

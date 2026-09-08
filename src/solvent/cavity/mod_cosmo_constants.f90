@@ -6,7 +6,7 @@
 module mod_cosmo_constants
 implicit none
 
-real(8),parameter :: bohr2ang = 0.52917721067d0
+real(8),parameter :: bohr2ang = 0.52917721092d0
 real(8),parameter :: PI_cosmo = 3.14159265358979324d0
 
 integer,parameter :: MAXV = 12

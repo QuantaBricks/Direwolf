@@ -206,7 +206,7 @@ end subroutine
 
 subroutine gridgen_nlc(nrad, nsph, npts, coor_out, weight_out, coor_in, per_atom_period_scale, intacc_eps)
 use MOL_info
-use GRID_info, only: xcgrid_prune_sphpot
+use GRID_info, only: xcgrid_prune_sphpot, gridgen_nlc_atom_of
 implicit none
 INCLUDE 'parameter.h'
 integer,intent(in) :: nrad, nsph
@@ -296,6 +296,8 @@ if (engine_verbose .ge. 2) then
 endif
 allocate(coor_out(3,npts))
 allocate(weight_out(npts))
+if (allocated(gridgen_nlc_atom_of)) deallocate(gridgen_nlc_atom_of)
+allocate(gridgen_nlc_atom_of(npts))
 
 Rij = 0.0d0
 aij_mat = 0.0d0
@@ -328,6 +330,7 @@ do iatm = 1,natoms
          coor_out(1,label) = radr*potx(j) + acoor(1,iatm)
          coor_out(2,label) = radr*poty(j) + acoor(2,iatm)
          coor_out(3,label) = radr*potz(j) + acoor(3,iatm)
+         gridgen_nlc_atom_of(label) = iatm
          do ii = 1,natoms
             rdist(ii) = dsqrt(sum((coor_out(:,label) - acoor(:,ii))**2))
          enddo
@@ -387,7 +390,7 @@ end subroutine gridgen_nlc
 
 subroutine gridgen_nlc_subset(nrad, nsph, atom_list, n_list, npts, coor_out, weight_out, atom_of_out, coor_in)
 use MOL_info
-use GRID_info, only: xcgrid_prune_sphpot
+use GRID_info, only: xcgrid_prune_sphpot, gridgen_nlc_atom_of
 implicit none
 INCLUDE 'parameter.h'
 integer,intent(in) :: nrad, nsph, n_list

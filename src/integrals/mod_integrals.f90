@@ -50,6 +50,8 @@ public :: df_force_avail_gb
 public :: engine_use_df, engine_use_df_j, engine_use_df_k, engine_do_force
 public :: cosx_promote_md
 public :: cosx_force_hi_grid
+public :: cosx_needs_rebuild
+public :: scf_prms_now
 public :: near_singular_overlap
 public :: engine_puream
 public :: norvec_is_identity
@@ -73,6 +75,8 @@ logical :: engine_use_df_k = .false.
 logical :: engine_do_force = .false.
 logical :: cosx_promote_md = .false.
 logical :: cosx_force_hi_grid = .false.
+logical :: cosx_needs_rebuild = .true.
+real(8) :: scf_prms_now = 0.0d0
 logical :: engine_puream = .false.
 logical :: norvec_is_identity = .false.
 logical :: engine_harris_guess = .true.

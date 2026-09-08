@@ -7,8 +7,10 @@
 subroutine build_adiis_terms(n,nconts,Pa_hist,Fa_hist,Pb_hist,Fb_hist,open_shell,lin,quad)
 implicit none
 integer,intent(in) :: n,nconts
-real(4),intent(in) :: Pa_hist(nconts,nconts,n),Fa_hist(nconts,nconts,n)
-real(4),intent(in) :: Pb_hist(nconts,nconts,n),Fb_hist(nconts,nconts,n)
+real(4),intent(in) :: Pa_hist(nconts,nconts,n)
+real(8),intent(in) :: Fa_hist(nconts,nconts,n)
+real(4),intent(in) :: Pb_hist(nconts,nconts,n)
+real(8),intent(in) :: Fb_hist(nconts,nconts,n)
 logical,intent(in) :: open_shell
 real(8),intent(out) :: lin(n),quad(n,n)
 real(8),allocatable :: dPa(:,:,:),dPb(:,:,:)

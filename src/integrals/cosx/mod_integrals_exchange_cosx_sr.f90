@@ -137,7 +137,7 @@ endif
 stage_changed = (stage_now .ne. cosx_stage_prev_sr)
 do_incremental = cosx_incr_valid_sr .and. (.not. stage_changed) .and. (cosx_stage_settle_sr .eq. 0) &
                   .and. (.not. cosx_no_incremental) .and. (.not. cosx_no_incremental_sr)
-kscreen_use_sr = merge(cosx_kscreen_incr_sr, cosx_kscreen_sr, do_incremental)
+kscreen_use_sr = merge(cosx_kscreen_incr_value(cosx_kscreen_incr_sr), cosx_kscreen_sr, do_incremental)
 if (do_incremental) then
    allocate(Da_eff(nConts,nConts), Db_eff(nConts,nConts))
    Da_eff = Da - cosx_D_incr_a_sr

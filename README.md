@@ -169,8 +169,6 @@ density-matrix warm start to/from a file.
 | `cosmo_sigma_profile_file` | `''` | write a σ-profile here |
 | `cosmo_ks_nseg` / `cosmo_ks_nface` | `92` / `1082` | Klamt-surface segmentation |
 
-**`&cosmors`** — `cosmors_cosmo_file` / `cosmors_compound_name` (`''` = derive
-from the input name): write a COSMO-RS `.cosmo` file.
 
 **`&professional`** — advanced performance tuning (XC grid cache, COSX grid
 density, …); see `docs/ENVIRONMENT.md`.
@@ -506,6 +504,72 @@ If you use Direwolf in published work, please cite it as:
   year         = {2026}
 }
 ```
+
+### Please also cite the methods you use
+
+Direwolf implements published methods. Citing Direwolf does not replace
+citing the work that a given calculation actually relies on. The list
+below covers the methods most commonly used through Direwolf; it is
+**not exhaustive** - functionals, basis sets, dispersion models and
+algorithms not named here still carry their own original references, and
+those should be cited too.
+
+**Semi-numerical exchange (COSX / chain-of-spheres), used by `K = 'cosx'`
+and therefore by the default RIJCOSX path**
+
+> F. Neese, F. Wennmohs, A. Hansen, U. Becke, *Chem. Phys.* **356**, 98 (2009).
+> R. Izsák, F. Neese, *J. Chem. Phys.* **135**, 144105 (2011).
+> B. Helmich-Paris, B. de Souza, F. Neese, R. Izsák, *J. Chem. Phys.* **155**, 104109 (2021).
+
+**Numerical integration grid** - every DFT calculation in Direwolf (the
+XC quadrature, the VV10 non-local grid and the COSX grid alike)
+partitions space with Becke's multicenter scheme, combined with Lebedev
+angular quadrature and Treutler-Ahlrichs radial mapping
+
+> A. D. Becke, *J. Chem. Phys.* **88**, 2547 (1988).  (multicenter numerical integration / Becke partitioning)
+> V. I. Lebedev, D. N. Laikov, *Dokl. Math.* **59**, 477 (1999).  (Lebedev angular grids)
+> O. Treutler, R. Ahlrichs, *J. Chem. Phys.* **102**, 346 (1995).  (radial mapping / M3-M4 grids)
+
+**Becke exchange and the B3LYP hybrid**
+
+> A. D. Becke, *Phys. Rev. A* **38**, 3098 (1988).  (B88 exchange, used by BLYP/B3LYP)
+> A. D. Becke, *J. Chem. Phys.* **98**, 5648 (1993).  (three-parameter hybrid, B3LYP)
+> C. Lee, W. Yang, R. G. Parr, *Phys. Rev. B* **37**, 785 (1988).  (LYP correlation)
+
+**Composite "-3c" methods (`B97-3c`, `r2SCAN-3c`, `wB97X-3c`)**
+
+> S. Grimme, J. G. Brandenburg, C. Bannwarth, A. Hansen, *J. Chem. Phys.* **143**, 054107 (2015).  (PBEh-3c, the family's original)
+> J. G. Brandenburg, C. Bannwarth, A. Hansen, S. Grimme, *J. Chem. Phys.* **148**, 064104 (2018).  (B97-3c)
+> S. Grimme, A. Hansen, S. Ehlert, J.-M. Mewes, *J. Chem. Phys.* **154**, 064103 (2021).  (r2SCAN-3c)
+> M. Müller, A. Hansen, S. Grimme, *J. Chem. Phys.* **158**, 014103 (2023).  (wB97X-3c)
+
+**Dispersion and basis-set-superposition corrections**
+
+> S. Grimme, J. Antony, S. Ehrlich, H. Krieg, *J. Chem. Phys.* **132**, 154104 (2010).  (D3)
+> S. Grimme, S. Ehrlich, L. Goerigk, *J. Comput. Chem.* **32**, 1456 (2011).  (D3 Becke-Johnson damping)
+> E. Caldeweyher, C. Bannwarth, S. Grimme, *J. Chem. Phys.* **147**, 034112 (2017).  (D4)
+> E. Caldeweyher, S. Ehlert, A. Hansen, H. Neugebauer, S. Spicher, C. Bannwarth, S. Grimme, *J. Chem. Phys.* **150**, 154122 (2019).  (D4)
+> H. Kruse, S. Grimme, *J. Chem. Phys.* **136**, 154101 (2012).  (gCP geometrical counterpoise)
+
+**VV10 non-local correlation and the VV10-containing functionals
+(`wB97M-V`, `wB97X-V`, `B97M-V`)**
+
+> O. A. Vydrov, T. Van Voorhis, *J. Chem. Phys.* **133**, 244103 (2010).  (VV10)
+> N. Mardirossian, M. Head-Gordon, *J. Chem. Phys.* **144**, 214110 (2016).  (wB97M-V)
+> N. Mardirossian, M. Head-Gordon, *Phys. Chem. Chem. Phys.* **16**, 9904 (2014).  (wB97X-V)
+> N. Mardirossian, M. Head-Gordon, *J. Chem. Phys.* **142**, 074111 (2015).  (B97M-V)
+
+**Other functionals** (r2SCAN, TPSS, M05/M06/MN15 family, B3LYP, PBE0,
+CAM-B3LYP, wB97X-D, ...) are evaluated through **libxc**; cite the
+functional's own original paper and
+
+> S. Lehtola, C. Steigemann, M. J. T. Oliveira, M. A. L. Marques, *SoftwareX* **7**, 1 (2018).  (libxc)
+
+**Underlying libraries** - integrals via **libcint** (Q. Sun,
+*J. Comput. Chem.* **36**, 1664 (2015)); D3/D4/gCP through the
+Grimme-group `simple-dftd3`, `dftd4` and `gcp` libraries; linear algebra
+via OpenBLAS. Basis sets carry their own references (see the Basis Set
+Exchange entry for the set you use).
 
 ## License
 

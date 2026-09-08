@@ -37,6 +37,7 @@ integer,save :: cosx_nBases_cached = -1
 real(8),save :: cosx_blkrad_max = 1.0d30
 real(8),save :: cosx_kscreen = 1.0d-7
 real(8),save :: cosx_kscreen_incr = 1.0d-9
+real(8),parameter :: COSX_KSCREEN_INCR_FLOOR = 1.0d-16
 logical,save :: cosx_no_incremental = .false.
 logical,save :: cosx_no_incremental_lr = .false.
 logical,save :: cosx_no_incremental_sr = .false.
@@ -50,6 +51,7 @@ real(8),allocatable,save,target :: cosx_coor_md(:,:), cosx_w_md(:), cosx_Qfull_m
 real(8),allocatable,save,target :: cosx_coor_hi(:,:), cosx_w_hi(:), cosx_Qfull_hi(:,:)
 real(8),allocatable,save,target :: cosx_QfullT_lo(:,:), cosx_QfullT_md(:,:), cosx_QfullT_hi(:,:)
 integer,save :: cosx_npts_lo = 0, cosx_npts_md = 0, cosx_npts_hi = 0
+integer,allocatable,save,target :: cosx_atom_hi(:)
 integer,allocatable,save,target :: cosx_blkptr_lo(:), cosx_blkidx_lo(:)
 integer,allocatable,save,target :: cosx_blkptr_md(:), cosx_blkidx_md(:)
 integer,allocatable,save,target :: cosx_blkptr_hi(:), cosx_blkidx_hi(:)
@@ -99,19 +101,28 @@ integer,allocatable,save,target :: cosx_ext_ptr_lr(:), cosx_ext_idx_lr(:)
 integer,allocatable,save :: cosx_ext_ptr_lr_sym(:), cosx_ext_idx_lr_sym(:)
 integer,allocatable,save,target :: cosx_ext_ptr_sr(:), cosx_ext_idx_sr(:)
 integer,allocatable,save :: cosx_ext_ptr_sr_sym(:), cosx_ext_idx_sr_sym(:)
-real(8),allocatable,save :: cosx_G_hi_a(:,:), cosx_G_hi_b(:,:)
+real(8),allocatable,save,target :: cosx_G_hi_a(:,:), cosx_G_hi_b(:,:)
 logical,save :: cosx_G_hi_valid = .false.
-real(8),allocatable,save :: cosx_G_hi_a_lr(:,:), cosx_G_hi_b_lr(:,:)
+real(8),allocatable,save,target :: cosx_G_hi_a_lr(:,:), cosx_G_hi_b_lr(:,:)
 logical,save :: cosx_G_hi_valid_lr = .false.
+logical,save :: cosx_need_force_hi = .false.
 
 contains
 
-subroutine cosx_sort_grid_morton(n, coor, w)
+pure real(8) function cosx_kscreen_incr_value(cap) result(k)
+real(8),intent(in) :: cap
+k = cap
+if (scf_prms_now .gt. 0.0d0) &
+   k = min(cap, max(COSX_KSCREEN_INCR_FLOOR, cosx_kscreen*scf_prms_now))
+end function cosx_kscreen_incr_value
+
+subroutine cosx_sort_grid_morton(n, coor, w, atom_of)
 implicit none
 integer,intent(in) :: n
 real(8),intent(inout) :: coor(3,n), w(n)
+integer,intent(inout) :: atom_of(n)
 integer(8),allocatable :: morton(:), morton_tmp(:)
-integer,allocatable :: idx(:), idx_tmp(:)
+integer,allocatable :: idx(:), idx_tmp(:), atom_sorted(:)
 real(8),allocatable :: coor_sorted(:,:), w_sorted(:)
 real(8) :: xmin,xmax,ymin,ymax,zmin,zmax
 integer(8) :: qx,qy,qz
@@ -154,14 +165,16 @@ allocate(morton_tmp(n),idx_tmp(n))
 call mergesort_morton(morton, idx, morton_tmp, idx_tmp, 1, n)
 deallocate(morton_tmp,idx_tmp,morton)
 
-allocate(coor_sorted(3,n), w_sorted(n))
+allocate(coor_sorted(3,n), w_sorted(n), atom_sorted(n))
 do i = 1,n
    coor_sorted(:,i) = coor(:,idx(i))
    w_sorted(i) = w(idx(i))
+   atom_sorted(i) = atom_of(idx(i))
 enddo
 coor(:,1:n) = coor_sorted(:,1:n)
 w(1:n) = w_sorted(1:n)
-deallocate(coor_sorted,w_sorted,idx)
+atom_of(1:n) = atom_sorted(1:n)
+deallocate(coor_sorted,w_sorted,atom_sorted,idx)
 
 end subroutine cosx_sort_grid_morton
 
@@ -448,7 +461,7 @@ enddo
 
 end subroutine cosx_build_shared
 
-subroutine cosx_build_grid_distprune(nrad, nsph, intacc_eps, coor_out, w_out, npts_out)
+subroutine cosx_build_grid_distprune(nrad, nsph, intacc_eps, coor_out, w_out, npts_out, atom_of_out)
 use MOL_info, only: atoms, nAtoms, engine_verbose
 implicit none
 INCLUDE 'parameter.h'
@@ -456,6 +469,7 @@ integer,intent(in) :: nrad, nsph
 real(8),intent(in) :: intacc_eps
 real(8),allocatable,intent(out) :: coor_out(:,:), w_out(:)
 integer,intent(out) :: npts_out
+integer,allocatable,intent(out) :: atom_of_out(:)
 integer :: nrad_atom(nAtoms), row_i, iatm, i, j, Ntemp, ii, jj, label
 integer :: atom_pts_i(nAtoms), atom_off(nAtoms), cursphpot
 real(8) :: Rij(nAtoms,nAtoms), aij_mat(nAtoms,nAtoms), acoor(3,nAtoms)
@@ -504,6 +518,7 @@ if (engine_verbose .ge. 2) &
 call flush(6)
 allocate(coor_out(3,npts_out))
 allocate(w_out(npts_out))
+allocate(atom_of_out(npts_out))
 
 Rij = 0.0d0
 aij_mat = 0.0d0
@@ -538,6 +553,7 @@ do iatm = 1,nAtoms
          coor_out(1,label) = radr*potx(j) + acoor(1,iatm)
          coor_out(2,label) = radr*poty(j) + acoor(2,iatm)
          coor_out(3,label) = radr*potz(j) + acoor(3,iatm)
+         atom_of_out(label) = iatm
          do ii = 1,nAtoms
             rdist(ii) = dsqrt(sum((coor_out(:,label) - acoor(:,ii))**2))
          enddo
@@ -644,13 +660,16 @@ end subroutine cosx_malloc_trim
 
 subroutine cosx_build_one_grid(nConts, nrad, nsph, coor_out, w_out, npts_out, Qfull_out, &
                                 blkptr_out, blkidx_out, blkcen_out, blkrad_out, &
-                                QfullT_out, blkstart_out, nblk_out, per_atom_period_scale, intacc_eps)
+                                QfullT_out, blkstart_out, nblk_out, per_atom_period_scale, intacc_eps, &
+                                atom_of_out)
 use MOL_info, only: S, engine_verbose
+use GRID_info, only: gridgen_nlc_atom_of
 use omp_lib, only: omp_get_thread_num, omp_get_num_threads
 implicit none
 integer,intent(in) :: nConts, nrad, nsph
 real(8),allocatable,intent(out) :: coor_out(:,:), w_out(:)
 integer,intent(out) :: npts_out
+integer,allocatable,intent(out) :: atom_of_out(:)
 real(8),allocatable,intent(out) :: Qfull_out(:,:)
 integer,allocatable,intent(out) :: blkptr_out(:), blkidx_out(:)
 real(8),allocatable,intent(out) :: blkcen_out(:,:), blkrad_out(:)
@@ -680,12 +699,20 @@ if (.not. cosx_distprune_checked) then
       print *,"COSX: using distance-ratio angular pruning (isolated, COSX-only)"
 endif
 
-if (cosx_distprune .and. present(intacc_eps)) then
-   call cosx_build_grid_distprune(nrad, nsph, intacc_eps, coor_out, w_out, npts_out)
-else
-   call gridgen_nlc(nrad, nsph, npts_out, coor_out, w_out, per_atom_period_scale=per_atom_period_scale, intacc_eps=intacc_eps)
-endif
-call cosx_sort_grid_morton(npts_out, coor_out, w_out)
+block
+   integer,allocatable :: atom_of_local(:)
+   if (cosx_distprune .and. present(intacc_eps)) then
+      call cosx_build_grid_distprune(nrad, nsph, intacc_eps, coor_out, w_out, npts_out, atom_of_local)
+   else
+      call gridgen_nlc(nrad, nsph, npts_out, coor_out, w_out, per_atom_period_scale=per_atom_period_scale, &
+                       intacc_eps=intacc_eps)
+      if (allocated(atom_of_local)) deallocate(atom_of_local)
+      allocate(atom_of_local(npts_out))
+      atom_of_local = gridgen_nlc_atom_of(1:npts_out)
+   endif
+   call cosx_sort_grid_morton(npts_out, coor_out, w_out, atom_of_local)
+   call move_alloc(atom_of_local, atom_of_out)
+end block
 
 allocate(blkstart_out(0:npts_out))
 nblk_out = 0
