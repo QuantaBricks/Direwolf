@@ -416,6 +416,8 @@ geometry instead of doing a single point. An ORCA/Gaussian input with an
  xyzfile    = 'start.xyz'
 &end
 &opt
+ opt_coord       = 'ric'
+ opt_hessian_file = 'hessian'   ! optional: seed from e.g. `xtb --hess`
 &end
 ```
 
@@ -427,6 +429,8 @@ for Cartesians). The Hessian is seeded from the Lindh model; supply
 Every cycle is appended to `<output>.opt.xyz` (multi-frame XYZ); the
 converged geometry is also printed in the output as `[FINAL GEOMETRY]`.
 `opt_restart` resumes from the last frame of `<output>.opt.xyz`.
+
+**`&opt`** (its presence alone enables optimization; every field optional)
 
 | tag | default | meaning |
 |---|---|---|
