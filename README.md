@@ -403,6 +403,45 @@ Mulliken/Lowdin. Set `resp_charges_on = .false.` in `&molecule` to skip
 the fit. Full details, defaults, and cross-code verification are in
 [docs/RESP_CHARGES.md](docs/RESP_CHARGES.md).
 
+## Geometry optimization
+
+Add an `&opt` namelist (its mere presence is enough) to minimize the
+geometry instead of doing a single point. An ORCA/Gaussian input with an
+`Opt` route token maps to the same path.
+
+```
+&molecule
+ functional = 'PBE'
+ baselabel  = 'def2svp'
+ xyzfile    = 'start.xyz'
+&end
+&opt
+&end
+```
+
+Quasi-Newton: RFO step with a trust radius and BFGS Hessian updates, run
+in **redundant internal coordinates** by default (`opt_coord = 'cart'`
+for Cartesians). The Hessian is seeded from the Lindh model; supply
+`opt_hessian_file` to start from an external Cartesian Hessian
+(Hartree/bohr², free-form - `xtb --hess` output is read as-is) instead.
+Every cycle is appended to `<output>.opt.xyz` (multi-frame XYZ); the
+converged geometry is also printed in the output as `[FINAL GEOMETRY]`.
+`opt_restart` resumes from the last frame of `<output>.opt.xyz`.
+
+| tag | default | meaning |
+|---|---|---|
+| `opt_maxcyc` | `100` | max optimization cycles |
+| `opt_conv` | `'normal'` | `'normal'` (gmax 4.5e-4 / grms 3.0e-4 / dmax 1.8e-3 / drms 1.2e-3 / dE 1e-6, the Gaussian set) or `'tight'` (gmax 1.5e-5 / grms 1.0e-5 / dE 1e-8) |
+| `opt_trust` | `0.3` | initial trust radius, bohr |
+| `opt_coord` | `'ric'` | `'ric'` (redundant internals) or `'cart'` |
+| `opt_restart` | `.true.` | resume from `<output>.opt.xyz` if present |
+| `opt_hessian_file` | `''` | initial Cartesian Hessian to seed from instead of the Lindh model |
+| `opt_write_ric` | `.false.` | dump the generated internal-coordinate set to `<output>.ric` |
+
+`opt_conv = 'tight'` also raises the SCF to `'tight'` automatically (an
+optimizer needs gradients cleaner than its own convergence threshold),
+and any `&opt` run raises the SCF to at least `'fine'`.
+
 ## Layout
 
 ```

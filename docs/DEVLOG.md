@@ -26,6 +26,11 @@ verified against a reference code (Psi4/ORCA/pyscf), not aspirational.
   VV10 paths.
 - **Solvation**: COSMO (GePol cavity, analytic force, charge
   conservation) and SMD, cross-verified against ORCA/NWChem/Gaussian.
+- **Geometry optimization**: RFO step with trust radius and BFGS
+  updates, in redundant internal coordinates or Cartesians; Lindh
+  model (or external `xtb --hess`) seed Hessian, restart from the
+  trajectory XYZ. Cycle counts matched to ORCA (identical convergence
+  thresholds) on light-element and metal-organic (Fe) test sets.
 - **I/O**: native namelist/XYZ/column `&atoms` formats, ORCA/Gaussian
   input-compatibility readers, TOML export, checkpoint/restart,
   Molden output.

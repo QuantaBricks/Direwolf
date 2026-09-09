@@ -46,6 +46,7 @@ integer :: stage_now
 logical :: stage_changed
 real(8),allocatable :: Da_eff(:,:), Db_eff(:,:)
 logical :: do_incremental
+logical :: same_spin
 real(8) :: kscreen_use
 integer(8) :: dbg_t0, dbg_t1, dbg_tick_local
 real(8) :: xmax_this_call, xmax_local
@@ -201,7 +202,6 @@ endif
 stage_changed = (stage_now .ne. cosx_stage_prev)
 do_incremental = cosx_incr_valid .and. (.not. stage_changed) .and. (cosx_stage_settle .eq. 0) &
                   .and. (.not. cosx_no_incremental)
-kscreen_use = merge(cosx_kscreen_incr_value(cosx_kscreen_incr), cosx_kscreen, do_incremental)
 cosx_G_hi_valid = .false.
 is_full_hi_build = need_force .and. (.not. do_incremental) .and. (stage_now .eq. 3)
 cosx_need_force_hi = need_force
@@ -217,10 +217,12 @@ if (do_incremental) then
    allocate(Da_eff(nConts,nConts), Db_eff(nConts,nConts))
    Da_eff = Da - cosx_D_incr_a
    Db_eff = Db - cosx_D_incr_b
+   same_spin = all(Da_eff .eq. Db_eff)
 else
    allocate(Da_eff(nConts,nConts), Db_eff(nConts,nConts))
    Da_eff = Da
    Db_eff = Db
+   same_spin = all(Da_eff .eq. Db_eff)
 endif
 
 Ka = 0.0d0
@@ -238,6 +240,7 @@ case default; cosx_Xblock_p => cosx_Xblock_hi
 end select
 if (do_incremental) then
    global_D_max = max(maxval(abs(Da_eff)), maxval(abs(Db_eff)))
+   kscreen_use = cosx_kscreen_incr_value(cosx_kscreen_incr, global_D_max)
    allocate(D_pair_max(0:nBases-1,0:nBases-1))
    D_pair_max = 0.0d0
    allocate(ao2shell(nConts))
@@ -266,6 +269,7 @@ if (do_incremental) then
    !$omp end parallel do
 else
    global_D_max = 0.0d0
+   kscreen_use = cosx_kscreen
 endif
 
 maxnloc = 0
@@ -399,7 +403,8 @@ do ib = 0,nblocks-1
       bet = merge(1.0d0, 0.0d0, ir .gt. 1)
       call cosx_dgemm('T','N',nb,nConts,run_len(ir),1.0d0, &
                  Xc(run_o(ir)+1,1),nloc, Da_eff(run_a(ir),1),nConts, bet,Fa,nb)
-      call cosx_dgemm('T','N',nb,nConts,run_len(ir),1.0d0, &
+      if (.not. same_spin) &
+         call cosx_dgemm('T','N',nb,nConts,run_len(ir),1.0d0, &
                  Xc(run_o(ir)+1,1),nloc, Db_eff(run_a(ir),1),nConts, bet,Fb,nb)
    enddo
 
@@ -407,10 +412,16 @@ do ib = 0,nblocks-1
    xmax_local = max(xmax_local, x_block_max)
    if (.not. do_incremental) cosx_Xblock_p(ib+1) = x_block_max
    allocate(F_gmax(0:nBases-1))
-   do si = 0,nBases-1
-      F_gmax(si) = max(maxval(abs(Fa(:,cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si)))), &
-                        maxval(abs(Fb(:,cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si)))))
-   enddo
+   if (same_spin) then
+      do si = 0,nBases-1
+         F_gmax(si) = maxval(abs(Fa(:,cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si))))
+      enddo
+   else
+      do si = 0,nBases-1
+         F_gmax(si) = max(maxval(abs(Fa(:,cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si)))), &
+                          maxval(abs(Fb(:,cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si)))))
+      enddo
+   endif
 
    allocate(Ga(nb,nConts), Gb(nb,nConts))
    Ga = 0.0d0
@@ -471,15 +482,23 @@ do ib = 0,nblocks-1
                ao_i = cosx_ao_offset(si) + i
                nij = NorVEC(ao_i)*NorVEC(ao_j)
                if (nij .eq. 0.0d0) cycle
-               do g = 1,nb
-                  wij = sign(1.0d0,w_batch(g)) * nij * buf(g + nb*((i-1)+di*(j-1)))
-                  Ga(g,ao_i) = Ga(g,ao_i) + wij*Fa(g,ao_j)
-                  Gb(g,ao_i) = Gb(g,ao_i) + wij*Fb(g,ao_j)
-                  if (sj .ne. si) then
-                     Ga(g,ao_j) = Ga(g,ao_j) + wij*Fa(g,ao_i)
-                     Gb(g,ao_j) = Gb(g,ao_j) + wij*Fb(g,ao_i)
-                  endif
-               enddo
+               if (same_spin) then
+                  do g = 1,nb
+                     wij = sign(1.0d0,w_batch(g)) * nij * buf(g + nb*((i-1)+di*(j-1)))
+                     Ga(g,ao_i) = Ga(g,ao_i) + wij*Fa(g,ao_j)
+                     if (sj .ne. si) Ga(g,ao_j) = Ga(g,ao_j) + wij*Fa(g,ao_i)
+                  enddo
+               else
+                  do g = 1,nb
+                     wij = sign(1.0d0,w_batch(g)) * nij * buf(g + nb*((i-1)+di*(j-1)))
+                     Ga(g,ao_i) = Ga(g,ao_i) + wij*Fa(g,ao_j)
+                     Gb(g,ao_i) = Gb(g,ao_i) + wij*Fb(g,ao_j)
+                     if (sj .ne. si) then
+                        Ga(g,ao_j) = Ga(g,ao_j) + wij*Fa(g,ao_i)
+                        Gb(g,ao_j) = Gb(g,ao_j) + wij*Fb(g,ao_i)
+                     endif
+                  enddo
+               endif
             enddo
          enddo
       enddo
@@ -487,7 +506,11 @@ do ib = 0,nblocks-1
 
    if (is_full_hi_build) then
       cosx_G_hi_a(bstart:bstart+nb-1,:) = Ga
-      cosx_G_hi_b(bstart:bstart+nb-1,:) = Gb
+      if (same_spin) then
+         cosx_G_hi_b(bstart:bstart+nb-1,:) = Ga
+      else
+         cosx_G_hi_b(bstart:bstart+nb-1,:) = Gb
+      endif
    endif
 
    ntrun = 0
@@ -516,7 +539,8 @@ do ib = 0,nblocks-1
       do it = 1,ntrun
          call cosx_dgemm('N','N',nConts,trun_len(it),nb,1.0d0, &
                     Qb,nConts, Ga(1,trun_a(it)),nb, 1.0d0,Ka_local(1,trun_a(it)),nConts)
-         call cosx_dgemm('N','N',nConts,trun_len(it),nb,1.0d0, &
+         if (.not. same_spin) &
+            call cosx_dgemm('N','N',nConts,trun_len(it),nb,1.0d0, &
                     Qb,nConts, Gb(1,trun_a(it)),nb, 1.0d0,Kb_local(1,trun_a(it)),nConts)
       enddo
       deallocate(Qb)
@@ -533,17 +557,19 @@ do ib = 0,nblocks-1
                + Kc(iao,trun_a(it):trun_a(it)+trun_len(it)-1)
          enddo
       enddo
-      do it = 1,ntrun
-         call cosx_dgemm('N','N',nloc,trun_len(it),nb,1.0d0, &
-                    Xc,nloc, Gb(1,trun_a(it)),nb, 0.0d0,Kc(1,trun_a(it)),nloc)
-      enddo
-      do it = 1,ntrun
-         do iao = 1,nloc
-            Kb_local(loc_ao(iao),trun_a(it):trun_a(it)+trun_len(it)-1) = &
-               Kb_local(loc_ao(iao),trun_a(it):trun_a(it)+trun_len(it)-1) &
-               + Kc(iao,trun_a(it):trun_a(it)+trun_len(it)-1)
+      if (.not. same_spin) then
+         do it = 1,ntrun
+            call cosx_dgemm('N','N',nloc,trun_len(it),nb,1.0d0, &
+                       Xc,nloc, Gb(1,trun_a(it)),nb, 0.0d0,Kc(1,trun_a(it)),nloc)
          enddo
-      enddo
+         do it = 1,ntrun
+            do iao = 1,nloc
+               Kb_local(loc_ao(iao),trun_a(it):trun_a(it)+trun_len(it)-1) = &
+                  Kb_local(loc_ao(iao),trun_a(it):trun_a(it)+trun_len(it)-1) &
+                  + Kc(iao,trun_a(it):trun_a(it)+trun_len(it)-1)
+            enddo
+         enddo
+      endif
       deallocate(Kc)
    endif
 
@@ -558,7 +584,7 @@ block
       !$omp barrier
       if (omp_get_thread_num() .eq. merge_tid) then
       Ka = Ka + Ka_local
-      Kb = Kb + Kb_local
+      if (.not. same_spin) Kb = Kb + Kb_local
       xmax_this_call = max(xmax_this_call, xmax_local)
       skip_total = skip_total + skip_local
       n_geo_total = n_geo_total + n_geo_local
@@ -586,6 +612,7 @@ if (engine_verbose .ge. 2) then
 endif
 
 Ka = 0.5d0*(Ka + transpose(Ka))
+if (same_spin) Kb = Ka
 Kb = 0.5d0*(Kb + transpose(Kb))
 
 if (do_incremental) then

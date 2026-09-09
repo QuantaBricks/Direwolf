@@ -450,7 +450,8 @@ $(BUILDDIR)/mod_wilson_bvec.o: mod_wilson_bvec.f90 | $(BUILDDIR)
 $(BUILDDIR)/mod_lindh_hessian.o: mod_lindh_hessian.f90 $(BUILDDIR)/mod_wilson_bvec.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
-$(BUILDDIR)/mod_internal_coords.o: mod_internal_coords.f90 $(BUILDDIR)/mod_wilson_bvec.o | $(BUILDDIR)
+$(BUILDDIR)/mod_internal_coords.o: mod_internal_coords.f90 $(BUILDDIR)/mod_wilson_bvec.o \
+                          $(BUILDDIR)/mod_lindh_hessian.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 $(BUILDDIR)/mod_geomopt.o: mod_geomopt.f90 $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engineup_interface.o \

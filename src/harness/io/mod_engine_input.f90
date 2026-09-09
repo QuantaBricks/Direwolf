@@ -39,7 +39,8 @@ character(16) :: runtype
 integer       :: opt_maxcyc
 character(16) :: opt_conv, opt_coord
 real(8)       :: opt_trust
-logical       :: opt_restart
+logical       :: opt_restart, opt_write_ric
+character(256):: opt_hessian_file
 
 integer       :: atomchg(EI_MAXATOM)
 real(8)       :: x(EI_MAXATOM), y(EI_MAXATOM), z(EI_MAXATOM)
@@ -94,7 +95,8 @@ end interface
 namelist /molecule/ ncenters, imult, icharge, functional, baselabel, ecplabel, basedir, unit, xyzfile, &
                      J, K, ri_aux_basis, spherical, harris_guess, calc_force, vv10_nonself, &
                      mem_cap_gb, estimate_only, n_threads, verbose, scf_conv, resp_charges_on, runtype
-namelist /opt/ opt_maxcyc, opt_conv, opt_trust, opt_coord, opt_restart
+namelist /opt/ opt_maxcyc, opt_conv, opt_trust, opt_coord, opt_restart, opt_write_ric, &
+                opt_hessian_file
 namelist /pointcharges/ npc, pc_q, pc_x, pc_y, pc_z
 namelist /checkpoint/ chk_read, chk_write, chk_file
 namelist /molden/ molden_write, molden_file, molden_read, molden_read_file
@@ -128,6 +130,7 @@ spherical = .true.; harris_guess = .true.; calc_force = .true.; vv10_nonself = .
 mem_cap_gb = 0.0d0; estimate_only = .false.; n_threads = 0; verbose = 1; scf_conv = 'regular'
 runtype = 'energy'
 opt_maxcyc = 100; opt_conv = 'normal'; opt_trust = 0.3d0; opt_coord = 'ric'; opt_restart = .true.
+opt_write_ric = .false.; opt_hessian_file = ''
 atomchg = 0; x = 0.0d0; y = 0.0d0; z = 0.0d0
 atom_basis = ''; atom_ecp = ''
 npc = 0; pc_q = 0.0d0; pc_x = 0.0d0; pc_y = 0.0d0; pc_z = 0.0d0
@@ -322,6 +325,8 @@ spec%opt_maxcyc  = opt_maxcyc
 spec%opt_trust   = opt_trust
 spec%opt_coord   = opt_coord
 spec%opt_restart = opt_restart
+spec%opt_write_ric = opt_write_ric
+spec%opt_hessian_file = opt_hessian_file
 
 allocate(spec%atomchg(ncenters), spec%x(ncenters), spec%y(ncenters), spec%z(ncenters))
 allocate(spec%atom_basis(ncenters), spec%atom_ecp(ncenters))

@@ -8,6 +8,7 @@ use mod_meminfo, only: get_process_memory_bytes
 implicit none
 private
 public :: scf_hist_reset, scf_hist_record, scf_hist_report, scf_hist_last_exc
+public :: scf_hist_niter, scf_hist_last_prms, scf_hist_last_de
 public :: scf_hist_set_ecomponents, scf_hist_last_ecoul, scf_hist_last_exact_exchange
 public :: scf_hist_last_hcore, scf_hist_last_erep
 
@@ -26,6 +27,29 @@ real(8),save :: last_hcore = 0.0d0
 real(8),save :: last_erep = 0.0d0
 
 contains
+
+integer function scf_hist_niter()
+    implicit none
+    scf_hist_niter = n_hist
+end function scf_hist_niter
+
+real(8) function scf_hist_last_prms()
+    implicit none
+    if (n_hist .ge. 1) then
+       scf_hist_last_prms = hist_prms(n_hist)
+    else
+       scf_hist_last_prms = 0.0d0
+    endif
+end function scf_hist_last_prms
+
+real(8) function scf_hist_last_de()
+    implicit none
+    if (n_hist .ge. 1) then
+       scf_hist_last_de = hist_dE(n_hist)
+    else
+       scf_hist_last_de = 0.0d0
+    endif
+end function scf_hist_last_de
 
 subroutine scf_hist_reset()
     implicit none

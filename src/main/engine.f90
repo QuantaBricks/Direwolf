@@ -20,6 +20,7 @@ subroutine EngineUp(ncenters,imult,icharge,functional_in,&
 use MOL_info
 use GRID_info, only: Grids
 use GRID_info, only: xcgrid_dynamic, xcgrid_refined, xcgrid_level, &
+                     force_dense_allow, &
                      XCGRID_RSCALE, XCGRID_SPH_IN, XCGRID_SPH_EDGE, &
                      xcgrid_switch_prms, XCGRID_COARSE, XCGRID_FINE, &
                      XCGRID_L4, XCGRID_L5, XCGRID_L6, XCGRID_L7, &
@@ -774,11 +775,13 @@ if (do_force) then
    print *, '[FORCE]'
    if (engine_use_df) call decide_df_force_mode()
    if (do_force) then
-      force_dense = .true.
-      force_dense_mgga = xc_uses_tau()
-      call xcgrid_free_derived()
-      call gridgen(info)
-      call GTOeval(info)
+      force_dense = force_dense_allow
+      force_dense_mgga = force_dense .and. xc_uses_tau()
+      if (force_dense) then
+         call xcgrid_free_derived()
+         call gridgen(info)
+         call GTOeval(info)
+      endif
       block
          real(8) :: excf
          real(8),allocatable :: fxca(:,:), fxcb(:,:)
@@ -964,6 +967,8 @@ E = 0
 E_rep = 0
 call integrals_finalize()
 cosx_needs_rebuild = .true.
+force_dense = .false.
+force_dense_mgga = .false.
 end subroutine reset_engine_state
 
 integer function ecp_core_electrons_prescan(base_label)

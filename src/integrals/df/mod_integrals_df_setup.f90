@@ -338,6 +338,8 @@ block
    df_avail_bytes = engine_avail_at_start_bytes
    df_direct_mode = .true.
    if (engine_use_df_k) df_direct_mode = (df_need_bytes > df_avail_bytes)
+   if (.not. need_k_est .and. RS_omega .le. 0.0d0) &
+      df_direct_mode = (df_need_bytes > df_avail_bytes)
    force_direct_env = ""
    call get_environment_variable("ENGINE_FORCE_DF_DIRECT", force_direct_env)
    if (trim(force_direct_env) .eq. "1") df_direct_mode = .true.

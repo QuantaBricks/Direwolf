@@ -80,6 +80,9 @@ subroutine xc_select_functional(name, hf_frac, rs_omega, rs_beta)
     case ("B97-3C","B97_3C")
        func_x_id = XC_GGA_XC_B97_3C
        func_c_id = XC_GGA_C_PBE
+    case ("PBE","PBE_PBE","GGA_X_PBE,GGA_C_PBE")
+       func_x_id = XC_GGA_X_PBE
+       func_c_id = XC_GGA_C_PBE
     case ("BLYP")
        func_x_id = XC_GGA_X_B88
        func_c_id = XC_GGA_C_LYP

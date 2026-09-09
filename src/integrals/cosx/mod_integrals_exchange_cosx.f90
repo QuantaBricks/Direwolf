@@ -39,6 +39,7 @@ real(8),save :: cosx_kscreen = 1.0d-7
 real(8),save :: cosx_kscreen_incr = 1.0d-9
 real(8),parameter :: COSX_KSCREEN_INCR_FLOOR = 1.0d-16
 logical,save :: cosx_no_incremental = .false.
+logical,save :: cosx_incr_scale_dmax = .true.
 logical,save :: cosx_no_incremental_lr = .false.
 logical,save :: cosx_no_incremental_sr = .false.
 logical,save :: cosx_peratom_lomd = .false.
@@ -109,11 +110,15 @@ logical,save :: cosx_need_force_hi = .false.
 
 contains
 
-pure real(8) function cosx_kscreen_incr_value(cap) result(k)
+pure real(8) function cosx_kscreen_incr_value(cap, dmax) result(k)
 real(8),intent(in) :: cap
+real(8),intent(in),optional :: dmax
+real(8) :: scale_by
+scale_by = scf_prms_now
+if (cosx_incr_scale_dmax .and. present(dmax)) scale_by = dmax
 k = cap
-if (scf_prms_now .gt. 0.0d0) &
-   k = min(cap, max(COSX_KSCREEN_INCR_FLOOR, cosx_kscreen*scf_prms_now))
+if (scale_by .gt. 0.0d0) &
+   k = min(cap, max(COSX_KSCREEN_INCR_FLOOR, cosx_kscreen*scale_by))
 end function cosx_kscreen_incr_value
 
 subroutine cosx_sort_grid_morton(n, coor, w, atom_of)
@@ -360,6 +365,9 @@ call get_environment_variable("ENGINE_COSX_KSCREEN", envchar, status=envstat)
 if (envstat .eq. 0) read(envchar,*) cosx_kscreen
 call get_environment_variable("ENGINE_COSX_KSCREEN_INCR", envchar, status=envstat)
 if (envstat .eq. 0) read(envchar,*) cosx_kscreen_incr
+call get_environment_variable("ENGINE_COSX_INCR_DMAX", envchar, status=envstat)
+if (envstat .eq. 0) cosx_incr_scale_dmax = &
+     .not. (trim(envchar).eq.'0' .or. trim(envchar).eq.'false')
 call get_environment_variable("ENGINE_COSX_NO_INCREMENTAL", envchar, status=envstat)
 if (envstat .eq. 0) cosx_no_incremental = (trim(envchar).eq.'1' .or. trim(envchar).eq.'true')
 call get_environment_variable("ENGINE_COSX_NO_INCREMENTAL_LR", envchar, status=envstat)

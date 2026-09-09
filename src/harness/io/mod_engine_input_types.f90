@@ -37,6 +37,8 @@ type :: engine_input_t
    real(8)       :: opt_trust = 0.3d0
    character(16) :: opt_coord = 'ric'
    logical       :: opt_restart = .true.
+   logical       :: opt_write_ric = .false.
+   character(256):: opt_hessian_file = ''
 
    integer, allocatable       :: atomchg(:)
    real(8), allocatable       :: x(:), y(:), z(:)

@@ -144,6 +144,7 @@ logical :: xcgrid_dynamic = .false.
 logical :: xcgrid_refined = .false.
 logical :: force_dense = .false.
 logical :: force_dense_mgga = .false.
+logical :: force_dense_allow = .true.
 integer,parameter :: XC_DIRECT_NCONTS = 500
 logical :: xc_direct_mode = .false.
 logical :: xcgrid_just_refined = .false.

@@ -6,9 +6,9 @@
 module mod_wilson_bvec
 implicit none
 private
-public :: bvec_stretch, bvec_bend, bvec_torsion
-public :: val_stretch, val_bend, val_torsion
-public :: cross3, wrap_pi
+public :: bvec_stretch, bvec_bend, bvec_torsion, bvec_linbend
+public :: val_stretch, val_bend, val_torsion, val_linbend
+public :: cross3, wrap_pi, perp_pair
 
 contains
 
@@ -54,6 +54,46 @@ x = dot_product(n1, n2)
 y = dot_product(m1, n2)
 val_torsion = atan2(y, x)
 end function val_torsion
+
+subroutine bvec_linbend(ra, rb, rc, u, sa, sb, sc, ok)
+real(8), intent(in)  :: ra(3), rb(3), rc(3), u(3)
+real(8), intent(out) :: sa(3), sb(3), sc(3)
+logical, intent(out) :: ok
+real(8) :: va(3), vc(3), rva, rvc, ea(3), ec(3)
+va = ra - rb ; rva = sqrt(sum(va*va))
+vc = rc - rb ; rvc = sqrt(sum(vc*vc))
+if (rva < 1.0d-6 .or. rvc < 1.0d-6) then
+   ok = .false.; sa = 0.0d0; sb = 0.0d0; sc = 0.0d0; return
+endif
+ea = va / rva
+ec = vc / rvc
+sa = (u - dot_product(u, ea)*ea) / rva
+sc = (u - dot_product(u, ec)*ec) / rvc
+sb = -(sa + sc)
+ok = .true.
+end subroutine bvec_linbend
+
+real(8) function val_linbend(ra, rb, rc, u)
+real(8), intent(in) :: ra(3), rb(3), rc(3), u(3)
+real(8) :: va(3), vc(3), rva, rvc
+va = ra - rb ; rva = max(sqrt(sum(va*va)), 1.0d-300)
+vc = rc - rb ; rvc = max(sqrt(sum(vc*vc)), 1.0d-300)
+val_linbend = dot_product(u, va/rva) + dot_product(u, vc/rvc)
+end function val_linbend
+
+subroutine perp_pair(axis, u1, u2)
+real(8), intent(in)  :: axis(3)
+real(8), intent(out) :: u1(3), u2(3)
+real(8) :: a(3), seed(3), n
+a = axis / max(sqrt(sum(axis*axis)), 1.0d-300)
+seed = [1.0d0, 0.0d0, 0.0d0]
+if (abs(a(1)) > 0.9d0) seed = [0.0d0, 1.0d0, 0.0d0]
+u1 = cross3(a, seed)
+n  = sqrt(sum(u1*u1))
+u1 = u1 / max(n, 1.0d-300)
+u2 = cross3(a, u1)
+u2 = u2 / max(sqrt(sum(u2*u2)), 1.0d-300)
+end subroutine perp_pair
 
 subroutine bvec_stretch(ra, rb, sa, sb, ok)
 real(8), intent(in)  :: ra(3), rb(3)

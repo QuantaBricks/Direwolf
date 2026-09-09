@@ -8,6 +8,8 @@ use mod_wilson_bvec, only: bvec_stretch, bvec_bend, bvec_torsion
 implicit none
 private
 public :: lindh_cart_hessian
+public :: lindh_rho, lindh_row
+public :: K_STRETCH, K_BEND, K_TORSION
 
 real(8), parameter :: L_ALPHA(3,3) = reshape([ &
    1.0000d0, 0.3949d0, 0.3949d0, &
