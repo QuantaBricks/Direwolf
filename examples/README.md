@@ -56,3 +56,7 @@ Directories are grouped by purpose:
   (explicit `element` array), `water_chkread.inp`/`water_chkwrite.inp`
   (`&checkpoint`), `water_pc.inp` (`&pointcharges`, QM/MM), and
   `water_rijk.inp` (plain water with DF/RI-JK).
+- `optimization/` - geometry optimization (`&opt` namelist): the
+  minimal case, Cartesian vs redundant-internal coordinates, tight
+  convergence, seeding from an external `xtb` Hessian, and a realistic
+  20-atom organic. See that directory's own README.

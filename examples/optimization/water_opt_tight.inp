@@ -1,0 +1,20 @@
+&molecule
+ imult      = 1
+ icharge    = 0
+ functional = 'B3LYP'
+ baselabel  = 'def2svp'
+ J          = 'RI'
+ K          = 'cosx'
+&end
+
+&atoms
+O    0.0000    0.0000    0.1500
+H    0.0000    0.7700   -0.4800
+H    0.0000   -0.7700   -0.4800
+&end
+
+&opt
+ opt_conv   = 'tight'
+ opt_maxcyc = 60
+ opt_trust  = 0.20
+&end
