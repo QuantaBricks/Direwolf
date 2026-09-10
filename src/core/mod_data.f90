@@ -62,6 +62,8 @@ character Functional*30
 
 integer :: engine_verbose = 1
 
+logical :: engine_quiet = .false.
+
 end module MOL_info
 
 module GRID_info

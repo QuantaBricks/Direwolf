@@ -435,7 +435,12 @@ $(BUILDDIR)/run_engine.o: run_engine.f90 $(BUILDDIR)/mod_integrals.o $(BUILDDIR)
                           $(BUILDDIR)/mod_engine_input.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engine_input_block.o \
                           $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_engineup_interface.o \
                           $(BUILDDIR)/mod_engine_results.o $(BUILDDIR)/mod_geomopt.o | $(BUILDDIR)
-	$(FORT90) $(tagCOMP) $< -o $@
+	# -ffpe-summary affects the main program unit only. Keep invalid/zero/
+	# overflow (real bugs); drop underflow+denormal - both fire routinely
+	# and harmlessly from exp() in integral/grid screening and DFT-grid
+	# tail densities, and libgfortran printed a scary-looking "exceptions
+	# are signalling" line at every exit because of it.
+	$(FORT90) $(tagCOMP) -ffpe-summary=invalid,zero,overflow $< -o $@
 
 # Geometry optimizer (src/harness/opt): a multi-step driver over
 # EngineUp - Cartesian RFO / trust-radius quasi-Newton seeded by the

@@ -348,7 +348,8 @@ end block
 
 nRec = INDEX_2E(nConts-1,nConts-1,nConts-1,nConts-1)+1
 
-print '("nConts = ", I0, "   (# contracted basis functions)   nRec = ", I0, "   (# unique 2e-integral records)")', nConts, nRec
+if (.not. engine_quiet) &
+   print '("nConts = ", I0, "   (# contracted basis functions)   nRec = ", I0, "   (# unique 2e-integral records)")', nConts, nRec
 
 overhead_bytes = int(real(predict_core_overhead_bytes(nConts, nAtoms),8) * MEM_SAFETY_MARGIN, 8)
 need_bytes = int(nRec,8) * 8_8
@@ -370,8 +371,10 @@ if (.not. engine_use_df) then
            trim(merge("DIRECT (recomputed every SCF cycle)","STORE (held in memory)             ",direct_mode))
    call flush(6)
 endif
-print *, '[SYSTEMEND]'
-print *
+if (.not. engine_quiet) then
+   print *, '[SYSTEMEND]'
+   print *
+endif
 
 allocate(NorVEC(nConts))
 allocate(NorVECsph(nBases))

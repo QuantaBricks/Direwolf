@@ -351,7 +351,8 @@ block
    if (engine_verbose .ge. 2) &
       print '(A)', "  [round 1/energy] predicted total peak="//trim(fmt_gb(df_energy_need_gb))// &
               "GB  available="//trim(fmt_gb(df_energy_avail_gb))//"GB"
-   print '(A)', "  Build mode: "//trim(merge("DIRECT (in-core)       ","STORE (density fitting)",df_direct_mode))
+   if (.not. engine_quiet) &
+      print '(A)', "  Build mode: "//trim(merge("DIRECT (in-core)       ","STORE (density fitting)",df_direct_mode))
 end block
 if (df_direct_mode) then
    call build_df_triple_list()

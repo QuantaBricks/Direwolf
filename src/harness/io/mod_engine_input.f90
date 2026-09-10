@@ -266,6 +266,27 @@ spec%imult = imult
 spec%icharge = icharge
 spec%functional = functional
 spec%baselabel = baselabel
+block
+   character(len=30) :: fu
+   integer :: kk, cc, np
+   fu = '' ; np = 0
+   do kk = 1, len_trim(functional)
+      cc = ichar(functional(kk:kk))
+      if (functional(kk:kk) == '-' .or. functional(kk:kk) == '_' .or. &
+          functional(kk:kk) == ' ') cycle
+      if (cc >= ichar('a') .and. cc <= ichar('z')) cc = cc - 32
+      np = np + 1
+      fu(np:np) = char(cc)
+   enddo
+   select case (trim(fu))
+   case ('B973C');    spec%baselabel = 'mtzvp'
+   case ('R2SCAN3C'); spec%baselabel = 'mtzvpp'
+   case ('WB97X3C');  spec%baselabel = 'vdzp'
+   end select
+   if (trim(spec%baselabel) /= trim(baselabel)) &
+      write(*,'(A)') ' [Notice] '//trim(functional)//' is a fixed-basis composite'// &
+         ' method - using its required basis "'//trim(spec%baselabel)//'"'
+end block
 spec%ecplabel = ecplabel
 spec%basedir = basedir
 spec%J = J

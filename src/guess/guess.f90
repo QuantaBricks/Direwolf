@@ -51,7 +51,7 @@ INCLUDE 'parameter.h'
        call guess_sad(info)
     endif
     if (Gtype .eq. 4) then
-       print *,"Checkpoint-file warm-start initial guess"
+       if (.not. engine_quiet) print *,"Checkpoint-file warm-start initial guess"
        Pa = Pa_chk
        Pb = Pb_chk
        Fa = 0.0d0

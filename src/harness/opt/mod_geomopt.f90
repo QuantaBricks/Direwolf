@@ -17,6 +17,7 @@ use mod_internal_coords, only: ic_set_t, ic_build, ic_rebuild_if_changed, ic_npr
                                 ic_write, &
                                 ic_rank
 use mod_internal_coords, only: ic_n_dropped
+use MOL_info, only: engine_quiet
 implicit none
 private
 public :: geomopt_run
@@ -67,6 +68,8 @@ nat = spec%ncenters
 n   = 3 * nat
 ric = (trim(spec%opt_coord) == 'ric') .or. (trim(spec%opt_coord) == 'internal') &
       .or. (trim(spec%opt_coord) == 'redundant')
+
+engine_quiet = .true.
 
 force_dense_allow = .false.
 
@@ -842,6 +845,7 @@ integer, intent(in) :: nat, u, ncyc, iconv
 real(8), intent(in) :: g3(3,nat), E, force_out(nat,3)
 logical, intent(in) :: ok
 integer :: i
+engine_quiet = .false.
 do i = 1, nat
    spec%x(i) = g3(1,i) * BOHR2ANG
    spec%y(i) = g3(2,i) * BOHR2ANG

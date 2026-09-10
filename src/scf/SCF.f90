@@ -62,7 +62,7 @@ INCLUDE 'parameter.h'
     call get_environment_variable("ENGINE_DIIS_WINDOW", diis_env)
     if (len_trim(diis_env) .gt. 0) read(diis_env,*) DIIS_MAX
     if (DIIS_MAX .lt. 1) DIIS_MAX = 1
-    print *,"DIIS window size:",DIIS_MAX
+    if (.not. engine_quiet) print *,"DIIS window size:",DIIS_MAX
     diis_n = 0
     allocate(diis_Fa(nconts,nconts,DIIS_MAX))
     allocate(diis_ea(nconts,nconts,DIIS_MAX))
@@ -71,7 +71,8 @@ INCLUDE 'parameter.h'
     allocate(diis_eb(nconts,nconts,DIIS_MAX))
     allocate(diis_Pb(nconts,nconts,DIIS_MAX))
 
-    print *,"cycle     Density_change     E_change(Hartree)  Total Energy(Hartree)   Exc(Hartree)  Diag.(s)  DFT(s)  Total(s)"
+    if (.not. engine_quiet) &
+       print *,"cycle     Density_change     E_change(Hartree)  Total Energy(Hartree)   Exc(Hartree)  Diag.(s)  DFT(s)  Total(s)"
     do while (iter .le. itmax)
         call system_clock(wc1)
         diis_active = .false.
@@ -152,11 +153,13 @@ INCLUDE 'parameter.h'
               k_mode = "exact, "//trim(merge("DIRECT","STORE ",direct_mode))
            endif
            vxc_mode = trim(merge("STORE (grid cached)      ","DIRECT (recomputed/batch)",grid_cache_mode))
-           print *, '[BUILDMODE]'
-           print '(A)', "  J:   "//trim(j_mode)
-           print '(A)', "  K:   "//trim(k_mode)
-           print '(A)', "  Vxc: "//trim(vxc_mode)
-           print *, '[BUILDMODEEND]'
+           if (.not. engine_quiet) then
+              print *, '[BUILDMODE]'
+              print '(A)', "  J:   "//trim(j_mode)
+              print '(A)', "  K:   "//trim(k_mode)
+              print '(A)', "  Vxc: "//trim(vxc_mode)
+              print *, '[BUILDMODEEND]'
+           endif
            end block
         endif
         allocate(Pc(nconts,nconts))
@@ -172,17 +175,20 @@ INCLUDE 'parameter.h'
 
         Prms = (Prms/((nconts+1)*nconts/2))**0.5
         call system_clock(wc6)
-        write(*,"(I4,F16.9,4X,F20.9,4X,F16.9,F16.9,2X,F8.3,F8.3,F8.3)")  &
-               iter,Prms,(E_n+E_rep)-E,E_n+E_rep,Exc, &
-               real(wc2-wc1,8)/wc_rate, dft_dt, real(wc6-wc1,8)/wc_rate
-        call flush(6)
+        if (.not. engine_quiet) then
+           write(*,"(I4,F16.9,4X,F20.9,4X,F16.9,F16.9,2X,F8.3,F8.3,F8.3)")  &
+                  iter,Prms,(E_n+E_rep)-E,E_n+E_rep,Exc, &
+                  real(wc2-wc1,8)/wc_rate, dft_dt, real(wc6-wc1,8)/wc_rate
+           call flush(6)
+        endif
         call scf_hist_record(iter, Prms, (E_n+E_rep)-E, E_n+E_rep, Exc, &
                               real(wc2-wc1,8)/wc_rate, dft_dt, real(wc6-wc1,8)/wc_rate)
 
         deallocate(Pc)
         econv_out = abs(E_n+E_rep-E)
         if (econv_out.le.Emax .and. Prms.le.Pmax  ) then
-             print '("Convergence: dE=",ES10.3," Hartree, dP=",ES10.3)',E_n+E_rep-E,Prms
+             if (.not. engine_quiet) &
+                print '("Convergence: dE=",ES10.3," Hartree, dP=",ES10.3)',E_n+E_rep-E,Prms
             if (cosx_enabled .and. .not. cosx_force_hi_grid) then
                cosx_force_hi_grid = .true.
                call scf_build_fock(Pa_n, Pb_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
@@ -213,11 +219,13 @@ INCLUDE 'parameter.h'
 
     if (iconv .eq. 0) then
        print *,"SCF FAILED"
-    else
+    else if (.not. engine_quiet) then
        print *,"SCF converged"
     endif
-    print *, '[SCFEND]'
-    print *
+    if (.not. engine_quiet) then
+       print *, '[SCFEND]'
+       print *
+    endif
 
     iconv_out = iconv
 

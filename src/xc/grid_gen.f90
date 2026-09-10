@@ -39,7 +39,7 @@ INCLUDE 'parameter.h'
     integer :: atom_npts
 
    call gridgen_count_points(totGrid, grdRec)
-   print '(A,I0)',"  VXC grid points: ",totGrid
+   if (.not. engine_quiet) print '(A,I0)',"  VXC grid points: ",totGrid
    call flush(6)
    nGrids = totGrid
    if (allocated(Grids)) deallocate(Grids)

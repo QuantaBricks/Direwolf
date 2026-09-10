@@ -127,7 +127,7 @@ if (n_threads .gt. 0) call omp_set_num_threads(n_threads)
 
 call openblas_set_num_threads(1)
 
-print *,"System cores available:",omp_get_num_procs(), &
+if (.not. engine_quiet) print *,"System cores available:",omp_get_num_procs(), &
         " Direwolf OpenMP threads in use:",omp_get_max_threads()
 call flush(6)
 
@@ -366,7 +366,8 @@ endif
 n_alpha = 0.5*(Multi-Charge+coreChg-1)
 n_beta = 0.5*(-Multi-Charge+coreChg+1)
 
-print '("n_alpha = ", I0, "   n_beta = ", I0, "   (# occupied alpha/beta electrons)")', n_alpha, n_beta
+if (.not. engine_quiet) &
+   print '("n_alpha = ", I0, "   n_beta = ", I0, "   (# occupied alpha/beta electrons)")', n_alpha, n_beta
 
 allocate(linkMat(natoms,natoms))
 linkMat = 0
@@ -392,7 +393,7 @@ else
 endif
 
 if (HF_exchange_frac .lt. 1.0d0) then
-   print *, '[GRID]'
+   if (.not. engine_quiet) print *, '[GRID]'
    block
       block
          character(len=32) :: dyngridenv, cacheenv
@@ -558,8 +559,10 @@ if (HF_exchange_frac .lt. 1.0d0) then
          end block
       endif
    end block
-   print *, '[GRIDEND]'
-   print *
+   if (.not. engine_quiet) then
+      print *, '[GRIDEND]'
+      print *
+   endif
 endif
 
 if (estimate_only) then
@@ -634,7 +637,7 @@ if (cosmo_on) then
    end block
 endif
 
-print *, '[SCF]'
+if (.not. engine_quiet) print *, '[SCF]'
 Gtype = 3
 allocate(Pa_chk(nConts,nConts),Pb_chk(nConts,nConts))
 chk_ok = .false.
@@ -781,7 +784,7 @@ block
 end block
 
 if (do_force) then
-   print *, '[FORCE]'
+   if (.not. engine_quiet) print *, '[FORCE]'
    if (engine_use_df) call decide_df_force_mode()
    if (do_force) then
       force_dense = force_dense_allow
@@ -801,11 +804,13 @@ if (do_force) then
    call prof_start("force")
    call calc_force(info)
    call prof_stop("force")
-   print *, '[FORCEEND]'
-   print *
+   if (.not. engine_quiet) then
+      print *, '[FORCEEND]'
+      print *
+   endif
 endif
 
-if (iconv .eq. 1) then
+if (iconv .eq. 1 .and. .not. engine_quiet) then
    if (resp_charges_on) then
       block
       real(8) :: RESPcharge_out(Natoms)
