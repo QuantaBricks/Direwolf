@@ -1,11 +1,7 @@
 &molecule
  imult      = 1
  icharge    = 0
- functional = 'PBE'
- baselabel  = 'def2svp'
- J          = 'RI'
- K          = 'cosx'
- scf_conv   = 'fine'
+ functional = 'r2scan-3c'
  n_threads  = 8
 &end
 

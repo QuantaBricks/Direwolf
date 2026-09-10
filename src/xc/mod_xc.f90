@@ -37,6 +37,7 @@ subroutine xc_select_functional(name, hf_frac, rs_omega, rs_beta)
     real(c_double) :: omega_c, alpha_c, beta_c
     type(xc_f03_func_info_t) :: info_x
     character(len=len(name)) :: name_upper
+    character(len=len(name)) :: name_canon
     integer :: ic, jc
 
     name_upper = trim(name)
@@ -45,15 +46,23 @@ subroutine xc_select_functional(name, hf_frac, rs_omega, rs_beta)
        if (jc .ge. iachar('a') .and. jc .le. iachar('z')) &
           name_upper(ic:ic) = achar(jc - (iachar('a')-iachar('A')))
     enddo
+    name_canon = ''
+    jc = 0
+    do ic = 1, len_trim(name_upper)
+       if (name_upper(ic:ic) == '-' .or. name_upper(ic:ic) == '_' .or. &
+           name_upper(ic:ic) == ' ') cycle
+       jc = jc + 1
+       name_canon(jc:jc) = name_upper(ic:ic)
+    enddo
 
-    is_hf = (trim(name_upper) .eq. "HF")
+    is_hf = (trim(name_canon) .eq. "HF")
     use_vv10 = .false.
 
-    select case (trim(name_upper))
-    case ("B3LYP","B3LYP_HYB")
+    select case (trim(name_canon))
+    case ("B3LYP","B3LYPHYB")
        func_x_id = XC_HYB_GGA_XC_B3LYP
        func_c_id = XC_GGA_C_PBE
-    case ("CAM-B3LYP")
+    case ("CAMB3LYP")
        func_x_id = XC_HYB_GGA_XC_CAM_B3LYP
        func_c_id = XC_GGA_C_PBE
     case ("TPSS")
@@ -65,10 +74,10 @@ subroutine xc_select_functional(name, hf_frac, rs_omega, rs_beta)
     case ("R2SCAN0")
        func_x_id = XC_HYB_MGGA_XC_R2SCAN0
        func_c_id = XC_MGGA_C_R2SCAN
-    case ("M06-2X","M06-2X_HYB")
+    case ("M062X","M062XHYB")
        func_x_id = XC_HYB_MGGA_X_M06_2X
        func_c_id = XC_MGGA_C_M06_2X
-    case ("WB97X-D","WB97X_D")
+    case ("WB97XD")
        func_x_id = XC_HYB_GGA_XC_WB97X_D
        func_c_id = XC_GGA_C_PBE
     case ("WB97X")
@@ -77,10 +86,10 @@ subroutine xc_select_functional(name, hf_frac, rs_omega, rs_beta)
     case ("PBE0")
        func_x_id = XC_HYB_GGA_XC_PBEH
        func_c_id = XC_GGA_C_PBE
-    case ("B97-3C","B97_3C")
+    case ("B973C")
        func_x_id = XC_GGA_XC_B97_3C
        func_c_id = XC_GGA_C_PBE
-    case ("PBE","PBE_PBE","GGA_X_PBE,GGA_C_PBE")
+    case ("PBE","PBEPBE","GGAXPBE,GGACPBE")
        func_x_id = XC_GGA_X_PBE
        func_c_id = XC_GGA_C_PBE
     case ("BLYP")
@@ -95,19 +104,19 @@ subroutine xc_select_functional(name, hf_frac, rs_omega, rs_beta)
          call get_environment_variable("ENGINE_P86_VWN", p86env)
          if (trim(p86env) .eq. "1") func_c_id = XC_GGA_C_P86VWN
        end block
-    case ("M06","M06_HYB")
+    case ("M06","M06HYB")
        func_x_id = XC_HYB_MGGA_X_M06
        func_c_id = XC_MGGA_C_M06
-    case ("M05-2X","M05_2X")
+    case ("M052X")
        func_x_id = XC_HYB_MGGA_X_M05_2X
        func_c_id = XC_MGGA_C_M05_2X
-    case ("M06L","M06-L","M06_L")
+    case ("M06L")
        func_x_id = XC_MGGA_X_M06_L
        func_c_id = XC_MGGA_C_M06_L
     case ("MN15")
        func_x_id = XC_HYB_MGGA_X_MN15
        func_c_id = XC_MGGA_C_MN15
-    case ("MN15L","MN15-L","MN15_L")
+    case ("MN15L")
        func_x_id = XC_MGGA_X_MN15_L
        func_c_id = XC_MGGA_C_MN15_L
     case ("LDA")
@@ -118,23 +127,23 @@ subroutine xc_select_functional(name, hf_frac, rs_omega, rs_beta)
        func_c_id = XC_GGA_C_PBE
        use_vv10 = .true.
        call vv10_set(5.9d0, 0.0093d0)
-     case ("RPW86PBE","RPW86","GGA_X_RPW86,GGA_C_PBE")
+     case ("RPW86PBE","RPW86","GGAXRPW86,GGACPBE")
         func_x_id = XC_GGA_X_RPW86
         func_c_id = XC_GGA_C_PBE
-     case ("WB97M-V","WB97M_V")
+     case ("WB97MV")
         func_x_id = XC_HYB_MGGA_XC_WB97M_V
         func_c_id = XC_GGA_C_PBE
         use_vv10 = .true.
         call vv10_set(6.0d0, 0.01d0)
-    case ("WB97X-V","WB97X_V")
+    case ("WB97XV")
        func_x_id = XC_HYB_GGA_XC_WB97X_V
        func_c_id = XC_GGA_C_PBE
        use_vv10 = .true.
        call vv10_set(6.0d0, 0.01d0)
-    case ("WB97X-3C","WB97X_3C")
+    case ("WB97X3C")
        func_x_id = XC_HYB_GGA_XC_WB97X_V
        func_c_id = XC_GGA_C_PBE
-    case ("B97M-V","B97M_V")
+    case ("B97MV")
        func_x_id = XC_MGGA_XC_B97M_V
        func_c_id = XC_GGA_C_PBE
        use_vv10 = .true.

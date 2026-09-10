@@ -138,6 +138,14 @@ Natoms = ncenters
 Multi = imult
 Charge = icharge
 Functional = functional_in
+block
+   integer :: fic, fii
+   do fii = 1, len_trim(Functional)
+      fic = ichar(Functional(fii:fii))
+      if (fic >= ichar('a') .and. fic <= ichar('z')) &
+         Functional(fii:fii) = char(fic - 32)
+   enddo
+end block
 disp_s6 = 0.0d0
 block
    integer :: dpos
@@ -145,9 +153,9 @@ block
    if (dpos .eq. 0) dpos = index(Functional, '_D2')
    if (dpos .gt. 0) then
       select case (trim(Functional(1:dpos-1)))
-      case ("B3LYP","B3LYP_HYB")
+      case ("B3LYP","B3LYP_HYB","B3LYPHYB")
          disp_s6 = 1.05d0
-      case ("PBE_PBE")
+      case ("PBE_PBE","PBE","PBEPBE")
          disp_s6 = 0.75d0
       case default
          disp_s6 = 1.0d0
@@ -178,15 +186,15 @@ block
    character(len=30) :: req_3c_basis
    req_3c_basis = ""
    select case (trim(Functional))
-   case ("B97-3C","B97_3C")
+   case ("B97-3C","B97_3C","B973C")
       disp_d3_damping = "BJ"
       gcp_method = "b973c"
       req_3c_basis = "mtzvp"
-   case ("R2SCAN-3C","R2SCAN_3C")
+   case ("R2SCAN-3C","R2SCAN_3C","R2SCAN3C")
       disp_d4_method = "r2scan-3c"
       gcp_method = "r2scan3c"
       req_3c_basis = "mtzvpp"
-   case ("WB97X-3C","WB97X_3C")
+   case ("WB97X-3C","WB97X_3C","WB97X3C")
       disp_d4_method = "wb97x-3c"
       req_3c_basis = "vdzp"
    end select
@@ -208,7 +216,8 @@ block
       end block
    endif
 end block
-if (trim(Functional) .eq. "R2SCAN-3C" .or. trim(Functional) .eq. "R2SCAN_3C") &
+if (trim(Functional) .eq. "R2SCAN-3C" .or. trim(Functional) .eq. "R2SCAN_3C" .or. &
+    trim(Functional) .eq. "R2SCAN3C") &
    Functional = "R2SCAN"
 use_chg_dispersion = (trim(Functional) .eq. "WB97X-D" .or. trim(Functional) .eq. "WB97X_D")
 call xc_select_functional(trim(Functional), HF_exchange_frac, RS_omega, RS_beta)
