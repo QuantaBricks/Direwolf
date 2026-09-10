@@ -51,7 +51,8 @@ tagCOMPF77 = -c -O3 -fopenmp -I$(DATADIR) -J$(BUILDDIR)
 
 VPATH = src/main:src/harness:src/harness/opt:src/harness/io:src/harness/io/namelist:src/harness/io/xyz:src/harness/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
 
-objects = $(BUILDDIR)/mod_data.o \
+objects = $(BUILDDIR)/mod_xcgrid_defaults.o \
+          $(BUILDDIR)/mod_data.o \
           $(BUILDDIR)/mod_profile.o \
           $(BUILDDIR)/mod_scf_history.o \
           $(BUILDDIR)/mod_meminfo.o \
@@ -188,6 +189,10 @@ $(BUILDDIR)/mod_version.o: $(BUILDDIR)/mod_version.f90
 # division form, so it gets the same flags for the same reason.
 $(BUILDDIR)/mod_vv10_aca.o: src/xc/mod_vv10_aca.f90 | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) -funsafe-math-optimizations -march=$(MARCH) $< -o $@
+
+# mod_data's GRID_info use's xcgrid_defaults (grid-tier constants + the
+# per-functional default-tier map), so it must build first.
+$(BUILDDIR)/mod_data.o: $(BUILDDIR)/mod_xcgrid_defaults.o
 
 $(BUILDDIR)/mod_vv10.o: src/xc/mod_vv10.f90 $(BUILDDIR)/mod_data.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) -funsafe-math-optimizations -march=$(MARCH) $< -o $@

@@ -26,7 +26,7 @@ use GRID_info, only: xcgrid_dynamic, xcgrid_refined, xcgrid_level, &
                      XCGRID_L4, XCGRID_L5, XCGRID_L6, XCGRID_L7, &
                      xcgrid_active_coarse, xcgrid_active_fine, &
                      xc_direct_mode, XC_DIRECT_NCONTS, force_dense, force_dense_mgga, &
-                     xcgrid_fine_level_for_functional, &
+                     xcgrid_default_level, &
                      grid_cache_mode, max_batch_nsig, grid_cache_capacity, ngrids
 use mod_integrals, only: resp_charges, &
                           integrals_init, engine_use_df, engine_use_df_j, engine_use_df_k, &
@@ -115,6 +115,7 @@ logical :: use_chg_dispersion
 character(8) :: disp_d3_damping
 character(20) :: disp_d4_method
 character(len=20) :: gcp_method
+character(len=30) :: functional_grid
 logical :: chk_ok
 logical :: has_warm_start
 
@@ -146,6 +147,7 @@ block
          Functional(fii:fii) = char(fic - 32)
    enddo
 end block
+functional_grid = Functional
 disp_s6 = 0.0d0
 block
    integer :: dpos
@@ -406,7 +408,7 @@ if (HF_exchange_frac .lt. 1.0d0) then
                  " >",XC_DIRECT_NCONTS," (override with ENGINE_GRID_CACHE=1)"
          endif
          xcgrid_active_coarse = XCGRID_COARSE
-         xcgrid_active_fine   = xcgrid_fine_level_for_functional(Functional)
+         xcgrid_active_fine   = xcgrid_default_level(functional_grid)
          if (xcgrid_active_fine .eq. XCGRID_L5) xcgrid_active_coarse = XCGRID_L4
          call get_environment_variable("ENGINE_XC_GRID_LEVEL", dyngridenv)
          if (len_trim(dyngridenv) .gt. 0) then

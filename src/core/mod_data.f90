@@ -67,6 +67,7 @@ logical :: engine_quiet = .false.
 end module MOL_info
 
 module GRID_info
+use xcgrid_defaults
 implicit none
 type Grid
     real(8)    :: coor(3)
@@ -127,12 +128,6 @@ integer :: xc_geo_level = XC_NLEVEL
 integer,allocatable :: gridgen_nlc_atom_of(:)
 logical :: dft_loose_built = .false.
 
-integer,parameter :: XCGRID_COARSE = 2
-integer,parameter :: XCGRID_FINE   = 3
-integer,parameter :: XCGRID_L4     = 4
-integer,parameter :: XCGRID_L5     = 5
-integer,parameter :: XCGRID_L6     = 6
-integer,parameter :: XCGRID_L7     = 7
 real(8) :: XCGRID_RSCALE(7)  = (/0.0d0, 0.60d0, 1.848d0, 0.845d0, 2.6d0, 1.30d0, 4.0d0/)
 integer :: XCGRID_M3_ANGGRID(7) = (/0, 3, 4, 5, 6, 7, 7/)
 real(8) :: XCGRID_M3_RSCALE(7)  = (/0.0d0, 0.65d0, 0.95d0, 1.55d0, 2.10d0, 2.70d0, 3.40d0/)
@@ -306,18 +301,6 @@ ag = max(1, min(7, anggrid))
 place = count(ratio .gt. alphas)
 cursphpot = ORCA_ANG(place+1, ag)
 end function xcgrid_prune_orca
-
-integer function xcgrid_fine_level_for_functional(functional) result(lvl)
-implicit none
-character(len=*),intent(in) :: functional
-lvl = XCGRID_FINE
-select case (trim(functional))
-case ("R2SCAN","R2SCAN0","R2SCAN-3C","R2SCAN_3C", &
-      "M06L","M06-L","M06_L","M06","M06_HYB","M06-2X","M06-2X_HYB","M05-2X", &
-      "MN15","MN15L","MN15-L")
-   lvl = XCGRID_L5
-end select
-end function xcgrid_fine_level_for_functional
 
 end module GRID_info
 
