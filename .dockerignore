@@ -1,0 +1,33 @@
+# Not needed to build/run Direwolf inside the image; keeping them out of the
+# build context is what actually matters for docker build speed (final
+# image size is controlled by the multi-stage COPY list in Dockerfile,
+# not by this file).
+.git
+.claude
+referenceDir
+release
+benchmark
+test
+docs
+report
+fort.*
+
+# Build artifacts. Docker's .dockerignore does NOT treat a bare "build"
+# as "match at every level" the way .gitignore does, so each artifact
+# path is listed explicitly. If these get COPY'd in, a from-scratch
+# `make` inside the image finds a stale, wrong-arch libxcf03.a / *.mod
+# already in place and skips rebuilding - cross-arch builds (e.g. armv7
+# on an x86 host) then fail with "Type mismatch ... INTEGER(4) to
+# INTEGER(8)" from the leftover x86 libxc .mod.
+#
+# NOTE: do NOT use "**/build" here - it also matches the real vendored
+# source directory third_party/toml-f/src/tomlf/build/, whose removal
+# breaks toml-f's cmake ("add_subdirectory given source 'build' which is
+# not an existing directory"). The anchored "third_party/*/build" hits
+# only the one-level cmake build dirs the vendored libs actually use.
+/build
+third_party/*/build
+third_party/_install
+third_party/OpenBLAS/*.a
+**/*.mod
+**/*.o

@@ -1,0 +1,26 @@
+&molecule
+ runtype = 'irc'
+ imult = 1
+ icharge = -1
+ functional = 'PBE0'
+ baselabel = 'def2-svp'
+ J = 'RI'
+ K = 'cosx'
+
+&end
+&cosmo
+ cosmo_on = .true.
+ cosmo_epsilon = 78.39
+&end
+&irc
+ irc_step = 0.2
+ irc_maxpoints = 60
+&end
+&atoms
+Cl    -0.000210400     0.000116086    -2.255125859
+C      0.000145423    -0.000039035     0.059966080
+Cl    -0.000238316     0.000147609     2.375241037
+H      1.077764234     0.108019513     0.059976387
+H     -0.632420226     0.879026805     0.059969489
+H     -0.445040715    -0.987270979     0.059972865
+&end

@@ -1,0 +1,38 @@
+sudo: false
+language: c
+env:
+# this is for Python, per http://danielnouri.org/notes/2012/11/23/use-apt-get-to-install-python-dependencies-for-travis-ci/
+virtualenv:
+  system_site_packages: true
+os:
+- linux
+compiler:
+- gcc
+- clang
+addons:
+  apt:
+    sources:
+    - ubuntu-toolchain-r-test
+    # clang-3.8 comes from this
+    - llvm-toolchain-precise
+    packages:
+    - cmake
+    - python-numpy
+    - gcc
+    - g++
+    - gfortran
+    # This should provide OpenMP
+    - clang
+    - libblas-dev
+script:
+- env
+- mkdir build
+- cd build
+- echo 'if the following fails, use `cmake --debug-output ..` instead'
+- cmake -DWITH_RANGE_COULOMB=1 .. -DENABLE_TEST=1 -DQUICK_TEST=1
+- make
+- echo 'cannot do `make test` right now'
+after_failure:
+- echo "FAILURE"
+- find . -name CMakeOutput.log -exec cat {} ";"
+- find . -name CMakeError.log -exec cat {} ";"

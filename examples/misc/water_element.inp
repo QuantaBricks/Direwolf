@@ -1,0 +1,14 @@
+&molecule
+ imult      = 1
+ icharge    = 0
+ functional = 'PBE_PBE'
+ baselabel  = '6-31g'
+ verbose    = 1
+ unit       = 'angstrom'
+&end
+
+&atoms
+O           0.0000         0.0000         0.0000
+H           0.7584         0.0000         0.5861
+H          -0.7584         0.0000         0.5861
+&end

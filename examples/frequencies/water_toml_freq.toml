@@ -1,0 +1,12 @@
+[molecule]
+  functional = "B3LYP"
+  baselabel = "def2-svp"
+  J = "RI"
+  K = "cosx"
+  runtype = "freq"
+
+[atoms]
+  element = [ "O", "H", "H" ]
+  x = [ 0.0, 0.0, 0.0 ]
+  y = [ 0.0, 0.7572, -0.7572 ]
+  z = [ 0.1173, -0.4692, -0.4692 ]

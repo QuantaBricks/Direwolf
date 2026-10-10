@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+title: "Direwolf"
+type: software
+authors:
+  - family-names: "Ma"
+    given-names: "Yizhou"
+  - family-names: "Chen"
+    given-names: "Xin"
+version: "V0.99"
+year: 2026
+license: AGPL-3.0-or-later
+url: "https://www.quantabricks.xyz"
+preferred-citation:
+  type: generic
+  title: "Direwolf, Revision V0.99"
+  authors:
+    - family-names: "Ma"
+      given-names: "Yizhou"
+    - family-names: "Chen"
+      given-names: "Xin"
+  publisher:
+    name: "QuantaBricks"
+    city: "Newark"
+    region: "NJ"
+  year: 2026

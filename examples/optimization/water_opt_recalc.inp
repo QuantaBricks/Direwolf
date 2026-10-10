@@ -1,0 +1,20 @@
+&molecule
+ runtype = 'opt'
+ imult      = 1
+ icharge    = 0
+ functional = 'PBE'
+ baselabel  = '6-31g'
+ J          = 'RI'
+ K          = 'RI'
+&end
+
+&atoms
+O    0.0000    0.0000    0.1500
+H    0.0000    0.7700   -0.4800
+H    0.0000   -0.7700   -0.4800
+&end
+
+&opt
+ opt_hess = 'calc'          ! analytic Hessian at the first step
+ opt_hess_every = 3          ! and again every 3 cycles (Gaussian recalc=3)
+&end

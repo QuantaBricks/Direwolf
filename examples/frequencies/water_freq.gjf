@@ -1,0 +1,10 @@
+%nprocshared=8
+# B3LYP/def2SVP Opt Freq
+
+water opt + freq
+
+0 1
+O    0.0000    0.0000    0.1500
+H    0.0000    0.7700   -0.4800
+H    0.0000   -0.7700   -0.4800
+

@@ -1,0 +1,55 @@
+! This file is part of mctc-lib.
+!
+! Licensed under the Apache License, Version 2.0 (the "License");
+! you may not use this file except in compliance with the License.
+! You may obtain a copy of the License at
+!
+!     http://www.apache.org/licenses/LICENSE-2.0
+!
+! Unless required by applicable law or agreed to in writing, software
+! distributed under the License is distributed on an "AS IS" BASIS,
+! WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+! See the License for the specific language governing permissions and
+! limitations under the License.
+
+!> Environment module providing common utilities and error handling.
+!>
+!> This module exports fundamental types and constants used throughout mctc-lib:
+!>
+!> - [[mctc_env_error:error_type]]: Allocatable error type for error propagation
+!> - [[mctc_env_error:fatal_error]]: Subroutine to create error messages
+!> - [[mctc_env_accuracy:wp]]: Working precision for real numbers (double precision)
+!> - [[mctc_env_accuracy:sp]], [[mctc_env_accuracy:dp]]: Single and double precision kind parameters
+!> - [[mctc_env_accuracy:i1]], [[mctc_env_accuracy:i2]], [[mctc_env_accuracy:i4]],
+!>   [[mctc_env_accuracy:i8]]: Integer kind parameters (1, 2, 4, 8 bytes)
+!>
+!> Error handling follows a simple pattern: pass an allocatable [[mctc_env_error:error_type]]
+!> to library routines, then check if it is allocated to detect errors.
+!>
+!> Example usage:
+!>
+!>```f90
+!> use mctc_env
+!> type(error_type), allocatable :: error
+!>
+!> call some_routine(result, error)
+!> if (allocated(error)) then
+!>    print '(a)', error%message
+!>    error stop
+!> end if
+!>```
+module mctc_env
+   use mctc_env_accuracy, only : sp, dp, wp, i1, i2, i4, i8
+   use mctc_env_error, only : error_type, fatal_error, mctc_stat
+   use mctc_env_system, only : get_argument, get_variable, &
+      & is_unix, is_windows
+   use mctc_env_timer, only : timer_type, format_time
+   implicit none
+   private
+
+   public :: sp, dp, wp, i1, i2, i4, i8
+   public :: error_type, fatal_error, mctc_stat
+   public :: get_argument, get_variable, is_unix, is_windows
+   public :: timer_type, format_time
+
+end module mctc_env

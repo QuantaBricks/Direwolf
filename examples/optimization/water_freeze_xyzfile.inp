@@ -1,0 +1,11 @@
+&molecule
+ runtype = 'opt'
+ xyzfile = 'water_freeze.xyz'
+ functional = 'PBE'
+ baselabel  = '6-31g'
+ J = 'RI'
+ K = 'RI'
+&end
+&opt
+ opt_restart = .false.
+&end

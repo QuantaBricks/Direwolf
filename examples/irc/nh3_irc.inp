@@ -1,0 +1,21 @@
+&molecule
+ runtype = 'irc'
+ imult      = 1
+ icharge    = 0
+ functional = 'PBE0'
+ baselabel  = 'def2-svp'
+ J          = 'RI'
+ K          = 'cosx'
+&end
+
+&irc
+ irc_step = 0.10
+ irc_maxpoints = 40
+&end
+
+&atoms
+N -0.000003093    -0.000010744     0.133432833
+H  1.002847340     0.000019346     0.133518868
+H -0.501408573     0.868493101     0.132825291
+H -0.501435674    -0.868501703     0.133515457
+&end

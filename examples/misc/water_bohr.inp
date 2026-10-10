@@ -1,0 +1,14 @@
+&molecule
+ imult      = 1
+ icharge    = 0
+ functional = 'PBE_PBE'
+ baselabel  = '6-31g'
+ verbose    = 1
+ unit       = 'bohr'
+&end
+
+&atoms
+O           0.0000         0.0000         0.0000
+H           1.4332         0.0000         1.1076
+H          -1.4332         0.0000         1.1076
+&end

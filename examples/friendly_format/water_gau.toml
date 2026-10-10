@@ -1,0 +1,78 @@
+[molecule]
+  ncenters = 3
+  imult = 1
+  icharge = 0
+  functional = "PBE_PBE"
+  baselabel = "6-31g"
+  ecplabel = ""
+  basedir = ""
+  J = "RI"
+  K = "cosx"
+  ri_aux_basis = ""
+  spherical = true
+  harris_guess = true
+  calc_force = true
+  vv10_nonself = false
+  mem_cap_gb = "0.0"
+  estimate_only = false
+  n_threads = 0
+  verbose = 1
+  scf_conv = "regular"
+  resp_charges_on = true
+
+[atoms]
+  element = [ "O", "H", "H" ]
+  x = [ "0.0", "0.7584", "-0.7584" ]
+  y = [ "0.0", "0.0", "0.0" ]
+  z = [ "0.0", "0.5861", "0.5861" ]
+  basis = [ "", "", "" ]
+  ecp = [ "", "", "" ]
+
+[opt]
+  run = false
+  opt_maxcyc = 100
+  opt_conv = "normal"
+  opt_trust = "0.3"
+  opt_coord = "ric"
+  opt_restart = true
+  opt_write_ric = false
+  opt_hessian_file = ""
+
+[pointcharges]
+  npc = 0
+  q = [ ]
+  x = [ ]
+  y = [ ]
+  z = [ ]
+
+[checkpoint]
+  chk_read = false
+  chk_write = false
+  chk_file = ""
+
+[molden]
+  molden_write = false
+  molden_file = ""
+  molden_read = false
+  molden_read_file = ""
+
+[cosmo]
+  cosmo_on = false
+  cosmo_epsilon = "78.4"
+  cosmo_radii_scale = "1.2"
+  cosmo_avg_area = "0.3"
+  cosmo_sigma_rav = "0.5"
+  cosmo_cavity_type = "gepol"
+  cosmo_rsolv = "0.0"
+  cosmo_ks_nseg = 92
+  cosmo_ks_nface = 1082
+  cosmo_sigma_profile_file = ""
+  cosmo_solvent = ""
+  cosmo_smd = false
+
+[cosmors]
+  cosmors_on = false
+  cosmors_cosmo_file = ""
+  cosmors_compound_name = ""
+
+[environment]

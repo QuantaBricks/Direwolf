@@ -1,0 +1,22 @@
+&molecule
+ runtype = 'opt'
+ imult      = 1
+ icharge    = 0
+ functional = 'PBE0'
+ baselabel  = 'def2-svp'
+ J          = 'RI'
+ K          = 'cosx'
+ freq       = .true.     ! confirm one imaginary mode at the end
+&end
+
+&opt
+ opt_ts = .true.
+ opt_hess = 'xtb'           ! start from the xtb Hessian instead (negative curvature kept)
+&end
+
+&atoms
+N 0.00000000 0.00000000 0.00000000
+H 0.99931222 0.00000000 0.17776415
+H -0.49965611 0.86542977 0.17776415
+H -0.49965611 -0.86542977 0.17776415
+&end

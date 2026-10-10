@@ -1,0 +1,11 @@
+%nprocshared=8
+#p PBE/6-31G Opt=ModRedundant
+
+water
+
+0 1
+O -1 0.0 0.0 0.15
+H 0 0.0 0.77 -0.48
+H 0.0 -0.77 -0.48
+
+B 2 3 F

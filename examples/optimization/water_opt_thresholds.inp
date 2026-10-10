@@ -1,0 +1,21 @@
+&molecule
+ runtype = 'opt'
+ imult      = 1
+ icharge    = 0
+ functional = 'PBE'
+ baselabel  = '6-31g'
+ J          = 'RI'
+ K          = 'RI'
+&end
+
+&atoms
+O    0.0000    0.0000    0.1500
+H    0.0000    0.7700   -0.4800
+H    0.0000   -0.7700   -0.4800
+&end
+
+&opt
+ opt_conv = 'loose'
+ opt_gmax = 1.0e-3     ! Hartree/bohr, replaces the level's own value
+ opt_smax = 5.0e-3     ! bohr
+&end
