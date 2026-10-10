@@ -253,8 +253,20 @@ $(LIBCINTDIR)/build/libcint.a:
 # re_lapack (RELA, expands to that when NO_LAPACK isn't set, which we
 # never set) is kept - it's actual LAPACK coverage this .a needs, not a
 # test.
+# OPENBLAS_TARGET: optional explicit OpenBLAS kernel target (e.g. NEHALEM for a portable x86-64-v2 build, as the
+# Docker image uses). Empty (default) keeps OpenBLAS's own CPU detection, which is what a native build wants;
+# a build machine whose CPU is newer than the vendored OpenBLAS knows (a CI runner) must name one instead.
+# OPENBLAS_NO_RELAPACK=1: build without ReLAPACK (OpenBLAS's own NO_RELAPACK option), i.e. with the reference
+# LAPACK routines in its place. Needed where relapack/config.h is not in the tree: OpenBLAS's own .gitignore lists
+# config.h and so ignores that source file, which a fresh git checkout therefore lacks. Empty (default) = ReLAPACK built.
+# The two stages run one after the other: re_lapack needs files the first stage generates, and in a single
+# parallel invocation it can start before they exist.
+OPENBLAS_TARGET ?=
+OPENBLAS_NO_RELAPACK ?=
+OPENBLAS_OPTS = USE_THREAD=1 USE_OPENMP=0 NO_SHARED=1 $(if $(OPENBLAS_TARGET),TARGET=$(OPENBLAS_TARGET)) $(if $(OPENBLAS_NO_RELAPACK),NO_RELAPACK=1)
 $(OPENBLASDIR)/libopenblas.a:
-	$(MAKE) -C $(OPENBLASDIR) USE_THREAD=1 USE_OPENMP=0 NO_SHARED=1 -j$(NPROC) libs netlib re_lapack shared
+	$(MAKE) -C $(OPENBLASDIR) $(OPENBLAS_OPTS) -j$(NPROC) libs
+	$(MAKE) -C $(OPENBLASDIR) $(OPENBLAS_OPTS) -j$(NPROC) netlib $(if $(OPENBLAS_NO_RELAPACK),,re_lapack) shared
 
 # -DBUILD_TESTING=OFF skips libxc's own testsuite/ subdirectory (the
 # xc-regression/xc-consistency/xc-threshold/xc-info/xc-get_data

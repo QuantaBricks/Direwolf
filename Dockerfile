@@ -22,6 +22,11 @@ WORKDIR /src
 # --build-arg MARCH=armv7-a+neon-vfpv4 for a 32-bit ARM (Raspberry Pi 2/3)
 # image.
 ARG MARCH=x86-64-v2
+# OpenBLAS kernel target for that same portable baseline (x86-64-v2 = Nehalem). Its own CPU detection fails on
+# a build host newer than the vendored OpenBLAS 0.3.20 knows (the GitHub runners), so it is named here.
+ARG OPENBLAS_TARGET=NEHALEM
+# ReLAPACK needs relapack/config.h, a source file OpenBLAS's own .gitignore ignores, so a git checkout lacks it.
+ARG OPENBLAS_NO_RELAPACK=1
 
 # The vendored third_party/ deps (OpenBLAS, libxc, libcint, toml-f,
 # mctc-lib, dftd3/4, gcp, multicharge) are a self-contained ~30-min build
@@ -30,7 +35,7 @@ ARG MARCH=x86-64-v2
 # full source COPY, so iterating on src/ doesn't re-pay it every time.
 COPY Makefile ./
 COPY third_party ./third_party
-RUN make MARCH="$MARCH" -j"$(nproc)" \
+RUN make MARCH="$MARCH" OPENBLAS_TARGET="$OPENBLAS_TARGET" OPENBLAS_NO_RELAPACK="$OPENBLAS_NO_RELAPACK" -j"$(nproc)" \
         third_party/libcint/build/libcint.a \
         third_party/OpenBLAS/libopenblas.a \
         third_party/libxc/build/libxcf03.a \
