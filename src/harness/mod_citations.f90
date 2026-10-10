@@ -5,6 +5,7 @@
 
 module mod_citations
 use mod_engine_input_types, only: engine_input_t
+use mod_version, only: engine_version
 use mod_xc, only: xc_write_references, xc_uses_vv10
 implicit none
 private
@@ -373,15 +374,16 @@ if (present(bibfile)) then
 endif
 
 write(u,'(A)') '[CITATIONS]'
-write(u,'(A)') '  Direwolf (QuantaBricks), https://www.quantabricks.xyz'
-write(u,'(A)') '  Please cite the methods used in this calculation:'
+write(u,'(A)') '  Direwolf'
+write(u,'(A)') '    Y. Ma and X. Chen, Direwolf, Revision '//trim(engine_version)//', QuantaBricks, Newark NJ, 2026.'
+write(u,'(A)') ''
+write(u,'(A)') '  and the methods used in this calculation:'
 if (ub /= 0) then
    write(ub,'(A)') '% Literature of the methods used in this Direwolf calculation (BibLaTeX).'
-   write(ub,'(A)') '@software{direwolf,'
+   write(ub,'(A)') '@misc{direwolf,'
    write(ub,'(A)') '  author = {Ma, Yizhou and Chen, Xin},'
    write(ub,'(A)') '  title = {Direwolf},'
-   write(ub,'(A)') '  organization = {QuantaBricks},'
-   write(ub,'(A)') '  url = {https://www.quantabricks.xyz},'
+   write(ub,'(A)') '  howpublished = {Revision '//trim(engine_version)//', QuantaBricks, Newark NJ},'
    write(ub,'(A)') '  date = {2026},'
    write(ub,'(A)') '}'
    write(ub,'(A)') ''
