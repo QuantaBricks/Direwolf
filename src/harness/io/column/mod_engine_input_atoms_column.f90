@@ -6,7 +6,7 @@
 module mod_engine_input_atoms_column
 implicit none
 private
-public :: is_old_namelist_atoms, parse_atoms_column, frozen_ranges, append_constraint
+public :: is_old_namelist_atoms, parse_atoms_column, frozen_ranges, append_constraint, append_freeze
 
 contains
 
@@ -152,7 +152,7 @@ do while (i <= n)
       write(piece,'(I0)') i
    endif
    if (len_trim(str) + len_trim(piece) + 1 > len(str)) then
-      print *, 'Too many separate frozen-atom ranges for opt_freeze (use opt_freeze = ... directly)'
+      print *, 'Too many separate frozen-atom ranges for atoms (write atoms ... in opt_constraints directly)'
       stop 1
    endif
    str = trim(str)//' '//trim(piece)
@@ -192,6 +192,18 @@ else
    cons = trim(piece)
 endif
 end subroutine append_constraint
+
+subroutine append_freeze(cons, atoms)
+character(len=*), intent(inout) :: cons
+character(len=*), intent(in) :: atoms
+if (len_trim(atoms) == 0) return
+if (len_trim(cons) + len_trim(atoms) + 9 > len(cons)) then
+   print *, 'Too many constraints for opt_constraints'
+   stop 1
+endif
+if (len_trim(cons) > 0) cons = trim(cons)//'; '
+cons = trim(cons)//'atoms '//trim(adjustl(atoms))
+end subroutine append_freeze
 
 subroutine split_tokens(line, tok, ntok)
 character(len=*), intent(in) :: line

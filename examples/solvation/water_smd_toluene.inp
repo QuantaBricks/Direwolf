@@ -13,8 +13,7 @@ H          -0.7584         0.0000         0.5861
 &end
 
 &cosmo
- cosmo_on          = .true.
- cosmo_cavity_type = 'gepol'
- cosmo_solvent     = 'toluene'
- cosmo_smd         = .true.
+ cavity_type = 'gepol'
+ solvent     = 'toluene'
+ smd         = .true.
 &end

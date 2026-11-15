@@ -4,7 +4,19 @@
 ! COSX response K for the CPSCF (many trial densities at once), split out
 
 submodule (mod_integrals:exchange_cosx_impl) exchange_cosx_resp_impl
+use MOL_info, only: engine_verbose
 real(8),save :: cosx_batch_omega = 0.0d0
+real(8),save :: cosx_dual_omega = 0.0d0, cosx_dual_c = 0.0d0
+real(8),allocatable,save :: cosx_batch_zsign(:)
+real(8),allocatable,save :: cosx_kc2(:,:,:)
+real(8),allocatable,save :: cosx_lz(:,:,:)
+integer,allocatable,save :: cosx_bra_kind(:)
+character(len=4),save :: cosx_resp_grid = '    '
+logical,save :: cosx_resp_relscr = .false.
+logical,save :: cosx_raw = .false.
+real(4),allocatable,save :: cosx_pcache(:,:,:)
+integer,allocatable,save :: cosx_pc_sboff(:)
+integer,save :: cosx_pc_next = -1, cosx_pc_nsb = -1, cosx_pc_nbs = -1, cosx_pc_nblk = -1
 contains
 module subroutine integrals_build_exchange_cosx_batch(nConts, nd, D, K)
 use mod_exchange, only: RS_omega, RS_beta, HF_exchange_frac
@@ -13,8 +25,13 @@ real(8),intent(in) :: D(nConts,nConts,nd)
 real(8),intent(out) :: K(nConts,nConts,nd)
 real(8) :: dum(1,1,1)
 real(8),allocatable :: Klr(:,:,:)
+if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0 .and. .not. cosx_dual_off()) then
+   cosx_dual_omega = RS_omega ; cosx_dual_c = RS_beta/HF_exchange_frac
+endif
 call cosx_batch_core(nConts, nd, D, K, nd, 1, dum, dum, 0, dum)
-if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
+if (cosx_dual_omega .gt. 0.0d0) then
+   cosx_dual_omega = 0.0d0 ; cosx_dual_c = 0.0d0
+else if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
    allocate(Klr(nConts,nConts,nd))
    cosx_batch_omega = RS_omega
    call cosx_batch_core(nConts, nd, D, Klr, nd, 1, dum, dum, 0, dum)
@@ -26,13 +43,20 @@ end subroutine integrals_build_exchange_cosx_batch
 
 module subroutine integrals_build_exchange_cosx_batch_c(nConts, nd, Lf, nop, Co, KC)
 use mod_exchange, only: RS_omega, RS_beta, HF_exchange_frac
+logical :: gdone
 integer,intent(in) :: nConts, nd, nop
 real(8),intent(in) :: Lf(nConts,nop,nd), Co(nConts,nop)
 real(8),intent(out) :: KC(nConts,nop,nd)
 real(8) :: dum(1,1,1)
 real(8),allocatable :: KClr(:,:,:)
-call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KC, nd, Lf)
-if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
+if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0 .and. .not. cosx_dual_off()) then
+   cosx_dual_omega = RS_omega ; cosx_dual_c = RS_beta/HF_exchange_frac
+endif
+gdone = .false.
+if (.not. gdone) call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KC, nd, Lf)
+if (cosx_dual_omega .gt. 0.0d0) then
+   cosx_dual_omega = 0.0d0 ; cosx_dual_c = 0.0d0
+else if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
    allocate(KClr(nConts,nop,nd))
    cosx_batch_omega = RS_omega
    call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KClr, nd, Lf)
@@ -42,9 +66,140 @@ if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
 endif
 end subroutine integrals_build_exchange_cosx_batch_c
 
+logical function cosx_dual_off()
+character(len=8) :: e
+call get_environment_variable("ENGINE_COSX_DUAL", e)
+cosx_dual_off = (trim(e) .eq. "0")
+end function cosx_dual_off
+
+module subroutine integrals_build_exchange_cosx_batch_cs(nConts, nd, Lf, nop, Co, zsign, KC)
+integer,intent(in) :: nConts, nd, nop
+real(8),intent(in) :: Lf(nConts,nop,nd), Co(nConts,nop), zsign(nd)
+real(8),intent(out) :: KC(nConts,nop,nd)
+integer :: m
+allocate(cosx_batch_zsign(nd))
+cosx_batch_zsign = zsign
+call integrals_build_exchange_cosx_batch_c(nConts, nd, Lf, nop, Co, KC)
+deallocate(cosx_batch_zsign)
+do m = 1,nd
+   if (zsign(m) < 0.0d0) KC(:,:,m) = -KC(:,:,m)
+enddo
+end subroutine integrals_build_exchange_cosx_batch_cs
+
+module subroutine integrals_build_exchange_cosx_batch_c2(nConts, nd, Lf, nop, Co, KC, KC2)
+use mod_exchange, only: RS_omega, RS_beta, HF_exchange_frac
+integer,intent(in) :: nConts, nd, nop
+real(8),intent(in) :: Lf(nConts,nop,nd), Co(nConts,nop)
+real(8),intent(out) :: KC(nConts,nop,nd), KC2(nConts,nop,nd)
+real(8) :: dum(1,1,1)
+real(8),allocatable :: KClr(:,:,:)
+allocate(cosx_batch_zsign(nd), cosx_kc2(nConts,nop,nd))
+cosx_batch_zsign = 0.0d0
+if (HF_exchange_frac .eq. 0.0d0 .and. RS_omega .gt. 0.0d0) then
+   cosx_batch_omega = RS_omega
+   call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KC, nd, Lf)
+   cosx_batch_omega = 0.0d0
+   KC2 = cosx_kc2
+   deallocate(cosx_batch_zsign, cosx_kc2)
+   return
+endif
+call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KC, nd, Lf)
+KC2 = cosx_kc2
+if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
+   allocate(KClr(nConts,nop,nd))
+   cosx_batch_omega = RS_omega
+   call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KClr, nd, Lf)
+   cosx_batch_omega = 0.0d0
+   KC(:,:,1:nd) = KC(:,:,1:nd) + (RS_beta/HF_exchange_frac)*KClr
+   KC2(:,:,1:nd) = KC2(:,:,1:nd) + (RS_beta/HF_exchange_frac)*cosx_kc2
+   deallocate(KClr)
+endif
+deallocate(cosx_batch_zsign, cosx_kc2)
+end subroutine integrals_build_exchange_cosx_batch_c2
+
+module subroutine integrals_build_exchange_cosx_batch_c2g(nConts, nd, L1, L2, nop, Co, KC, KC2)
+use mod_exchange, only: RS_omega, RS_beta, HF_exchange_frac
+integer,intent(in) :: nConts, nd, nop
+real(8),intent(in) :: L1(nConts,nop,nd), L2(nConts,nop,nd), Co(nConts,nop)
+real(8),intent(out) :: KC(nConts,nop,nd), KC2(nConts,nop,nd)
+real(8) :: dum(1,1,1)
+real(8),allocatable :: KClr(:,:,:)
+allocate(cosx_lz(nConts,nop,nd), cosx_kc2(nConts,nop,nd))
+cosx_lz = L2
+if (HF_exchange_frac .eq. 0.0d0 .and. RS_omega .gt. 0.0d0) then
+   cosx_batch_omega = RS_omega
+   call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KC, nd, L1)
+   cosx_batch_omega = 0.0d0
+   KC2 = cosx_kc2
+   deallocate(cosx_lz, cosx_kc2)
+   return
+endif
+if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
+   cosx_dual_omega = RS_omega
+   cosx_dual_c = RS_beta/HF_exchange_frac
+endif
+call cosx_batch_core(nConts, nd, dum, dum, 0, nop, Co, KC, nd, L1)
+cosx_dual_omega = 0.0d0 ; cosx_dual_c = 0.0d0
+KC2 = cosx_kc2
+deallocate(cosx_lz, cosx_kc2)
+end subroutine integrals_build_exchange_cosx_batch_c2g
+
+module subroutine integrals_build_exchange_cosx_batch_raw(nConts, nd, D, K)
+use mod_exchange, only: RS_omega, RS_beta, HF_exchange_frac
+integer,intent(in) :: nConts, nd
+real(8),intent(in) :: D(nConts,nConts,nd)
+real(8),intent(out) :: K(nConts,nConts,nd)
+real(8) :: dum(1,1,1)
+real(8),allocatable :: Klr(:,:,:)
+cosx_raw = .true.
+if (HF_exchange_frac .eq. 0.0d0 .and. RS_omega .gt. 0.0d0) then
+   cosx_batch_omega = RS_omega
+   call cosx_batch_core(nConts, nd, D, K, nd, 1, dum, dum, 0, dum)
+   cosx_batch_omega = 0.0d0
+   cosx_raw = .false.
+   return
+endif
+call cosx_batch_core(nConts, nd, D, K, nd, 1, dum, dum, 0, dum)
+if (RS_omega .gt. 0.0d0 .and. HF_exchange_frac .gt. 0.0d0) then
+   allocate(Klr(nConts,nConts,nd))
+   cosx_batch_omega = RS_omega
+   call cosx_batch_core(nConts, nd, D, Klr, nd, 1, dum, dum, 0, dum)
+   cosx_batch_omega = 0.0d0
+   K(:,:,1:nd) = K(:,:,1:nd) + (RS_beta/HF_exchange_frac)*Klr
+   deallocate(Klr)
+endif
+cosx_raw = .false.
+end subroutine integrals_build_exchange_cosx_batch_raw
+
+module subroutine cosx_set_resp_grid(name)
+character(len=*),intent(in) :: name
+cosx_resp_grid = name
+end subroutine cosx_set_resp_grid
+
+module subroutine cosx_set_resp_relscreen(on)
+logical,intent(in) :: on
+cosx_resp_relscr = on
+end subroutine cosx_set_resp_relscreen
+
+module subroutine cosx_set_bra_kind(kind, nd)
+integer,intent(in) :: nd, kind(nd)
+if (allocated(cosx_bra_kind)) deallocate(cosx_bra_kind)
+if (nd > 0) then
+   allocate(cosx_bra_kind(nd))
+   cosx_bra_kind = kind
+endif
+end subroutine cosx_set_bra_kind
+
+module subroutine integrals_cosx_resp_cache_clear()
+if (allocated(cosx_pcache)) deallocate(cosx_pcache)
+if (allocated(cosx_pc_sboff)) deallocate(cosx_pc_sboff)
+cosx_pc_next = -1 ; cosx_pc_nsb = -1 ; cosx_pc_nbs = -1 ; cosx_pc_nblk = -1
+end subroutine integrals_cosx_resp_cache_clear
+
 subroutine cosx_batch_core(nConts, nd, D, K, nkd, nop, Co, KC, nkc, Lf)
 use omp_lib, only: omp_get_thread_num, omp_get_num_threads, omp_get_wtime, &
-                   omp_lock_kind, omp_init_lock, omp_set_lock, omp_unset_lock, omp_destroy_lock
+                   omp_lock_kind, omp_init_lock, omp_set_lock, omp_unset_lock, omp_destroy_lock, &
+                   omp_set_schedule, omp_sched_dynamic, omp_sched_static
 use mod_fixq, only: to_q, from_q
 implicit none
 integer,intent(in) :: nConts, nd
@@ -61,7 +216,28 @@ logical :: do_var, fit
 real(8) :: kscr_loc
 real(8) :: nij, esp_eff, r_far, seg_ab(3), seg_cl(3), seg_len2, seg_t, xbm, k_bound, sg
 real(8),allocatable :: Xd(:,:), Qb(:,:), Xc(:,:), vdum(:,:,:), RR(:,:,:), OO(:,:,:), Asub(:,:,:)
-real(8),allocatable :: Kloc(:,:), Fgm(:), buf(:), env_g(:), int_cache(:)
+real(8),allocatable :: Aval(:), AFt(:,:), RRt(:,:), Twk(:,:), swg(:), Atmp(:)
+integer,allocatable :: erow(:), ecol(:), itmp(:)
+logical,allocatable :: emir(:), ltmp(:)
+integer :: ne, ecap, ee, mm2
+real(8) :: av
+integer,allocatable :: rptr(:), cpos(:), ccol(:), cidx(:)
+real(8),allocatable :: acc(:), Acsr(:)
+real(8) :: s8a(8), s8b(8), s8c(8), a8, s4a(4)
+integer :: ncp, mb, k8
+integer :: kr
+logical :: twoleg
+real(8),allocatable :: Chat(:,:), K2T(:,:), K2loc(:,:), Yh(:,:)
+integer :: ncps
+integer(16),allocatable :: K2q(:,:), K2qt(:,:)
+logical :: usepc
+integer :: pslot, isb, nsbt
+real(8) :: amc, amx2
+integer(omp_lock_kind),allocatable :: k2lk(:)
+integer :: nk2l, ok2, ik2
+logical :: dynblk
+logical :: useaf
+real(8),allocatable :: Kloc(:,:), Fgm(:), buf(:), env_g(:), int_cache(:), buf2(:)
 integer,allocatable :: run_a(:), run_len(:)
 integer :: nrun, ir, a0
 character(len=32) :: envs
@@ -71,7 +247,8 @@ integer,pointer :: blkptr_p(:), blkidx_p(:), blkstart_p(:)
 integer :: nblk_p
 real(8),allocatable :: Dp(:,:,:), KV(:,:), KVs(:,:), KT(:,:)
 integer(16),allocatable :: KTq(:,:)
-real(8) :: tb0, tb(12), tw(4), tw0, tbusy, bmax, bmin, tmg
+real(8) :: tb0, tb(12), tw(4), tw0, tbusy, bmax, bmin, tmg, tig, tnz, tq(4), tq0
+real(8) :: tsc(4), amx, aij
 integer,allocatable :: border(:)
 real(8),allocatable :: bcost(:)
 integer :: ibo
@@ -115,11 +292,19 @@ if (cosx_resp_follow_scf) then
       envs = "lo"
    endif
 endif
+if (len_trim(cosx_resp_grid) .gt. 0) envs = cosx_resp_grid
+if (cosx_resp_relscr .and. .not. proj) kscr_loc = max(1.0d-14, cosx_kscreen*min(1.0d0, maxval(abs(D(:,:,1:nd)))/1.0d-2))
+if (cosx_resp_relscr .and. proj) kscr_loc = max(1.0d-14, cosx_kscreen*min(1.0d0, maxval(abs(Lf(:,:,1:nd)))/1.0d-2))
 select case (trim(envs))
 case ("md")
    coor_p => cosx_coor_md; w_p => cosx_w_md; QfullT_p => cosx_QfullT_md
    blkptr_p => cosx_blkptr_md; blkidx_p => cosx_blkidx_md; blkstart_p => cosx_blkstart_md
    blkcen_p => cosx_blkcen_md; blkrad_p => cosx_blkrad_md; nblk_p = cosx_nblk_md
+case ("td")
+   call cosx_build_td_grid(nConts)
+   coor_p => cosx_coor_td; w_p => cosx_w_td; QfullT_p => cosx_QfullT_td
+   blkptr_p => cosx_blkptr_td; blkidx_p => cosx_blkidx_td; blkstart_p => cosx_blkstart_td
+   blkcen_p => cosx_blkcen_td; blkrad_p => cosx_blkrad_td; nblk_p = cosx_nblk_td
 case ("lo")
    coor_p => cosx_coor_lo; w_p => cosx_w_lo; QfullT_p => cosx_QfullT_lo
    blkptr_p => cosx_blkptr_lo; blkidx_p => cosx_blkidx_lo; blkstart_p => cosx_blkstart_lo
@@ -147,9 +332,11 @@ nrp = 64
 call get_environment_variable("ENGINE_CPSCF_COSX_RPTS", envs)
 if (len_trim(envs) .gt. 0) read(envs,*) nrp
 call get_environment_variable("ENGINE_CPSCF_COSX_KSHARED", envs)
-kshr = proj .and. trim(envs) .ne. "0"
+kshr = (proj .or. cosx_raw) .and. trim(envs) .ne. "0"
 call get_environment_variable("ENGINE_CPSCF_COSX_COOP", envs)
 coop = proj .and. rsub .and. .not. do_var .and. trim(envs) .eq. "1"
+twoleg = allocated(cosx_kc2) .and. proj
+if (twoleg .or. cosx_dual_omega .gt. 0.0d0) coop = .false.
 kshm = 1
 if (trim(envs) .eq. "2") kshm = 2
 mgs = max(1, (nd+15)/16)
@@ -163,8 +350,12 @@ endif
 maxd = maxval(cosx_shell_dim(0:nBases-1))
 nbs = max(1, min(BATCH, 4000000/(n*n)))
 if (coop) nbs = max(1, min(BATCH, 16000000/(n*n)))
+if (((proj .and. (nd .lt. nop .or. twoleg)) .or. (cosx_raw .and. .not. proj)) .and. .not. coop) then
+   call get_environment_variable("ENGINE_COSX_AF", envs)
+   if (trim(envs) .ne. "0") nbs = max(1, min(BATCH, 32))
+endif
 call get_environment_variable("ENGINE_CPSCF_COSX_NBS", envs)
-if (coop .and. len_trim(envs) .gt. 0) read(envs,*) nbs
+if (len_trim(envs) .gt. 0) read(envs,*) nbs
 nrp = max(nbs, (nrp/nbs)*nbs)
 ndc = max(1, min(nd, 32000000/(n*n)))
 if (proj) ndc = nd
@@ -189,12 +380,57 @@ do ib = 2, nblk_p
    enddo
    border(kk+1) = ibo ; bcost(kk+1) = tb0
 enddo
-call get_environment_variable("ENGINE_COSX_BATCH_TIME", envs)
-btime = (trim(envs) .eq. "1")
-tb = 0.0d0 ; tw = 0.0d0 ; tw0 = omp_get_wtime()
+btime = (engine_verbose .ge. 2)
+tb = 0.0d0 ; tw = 0.0d0 ; tnz = 0.0d0 ; tq = 0.0d0 ; tsc = 0.0d0 ; tw0 = omp_get_wtime()
+usepc = .false.
+if (twoleg .and. .not. coop) then
+   call get_environment_variable("ENGINE_COSX_PCACHE", envs)
+   usepc = (trim(envs) .ne. "0")
+endif
+if (usepc) then
+   nsbt = 0
+   do ib = 0, nblk_p-1
+      nsbt = nsbt + (blkstart_p(ib+1) - blkstart_p(ib) + nbs - 1)/nbs
+   enddo
+   if (int(cosx_ext_ptr(nBases),8)*int(nsbt,8)*8_8 .gt. 2000000000_8) usepc = .false.
+endif
+if (usepc) then
+   if (cosx_pc_next .ne. cosx_ext_ptr(nBases) .or. cosx_pc_nsb .ne. nsbt .or. cosx_pc_nbs .ne. nbs &
+       .or. cosx_pc_nblk .ne. nblk_p) then
+      call integrals_cosx_resp_cache_clear()
+      allocate(cosx_pcache(cosx_ext_ptr(nBases), nsbt, 2), cosx_pc_sboff(0:nblk_p-1))
+      cosx_pcache = -1.0
+      nsbt = 0
+      do ib = 0, nblk_p-1
+         cosx_pc_sboff(ib) = nsbt
+         nsbt = nsbt + (blkstart_p(ib+1) - blkstart_p(ib) + nbs - 1)/nbs
+      enddo
+      cosx_pc_next = cosx_ext_ptr(nBases) ; cosx_pc_nsb = nsbt ; cosx_pc_nbs = nbs ; cosx_pc_nblk = nblk_p
+   endif
+   pslot = merge(2, 1, cosx_batch_omega .gt. 0.0d0)
+endif
+if (twoleg) then
+   allocate(Chat(n,nop))
+   if (fit) then
+      call dgemm('T','N',n,nop,n,1.0d0,QfullT_p(1,1),n,Co(1,1),n,0.0d0,Chat,n)
+   else
+      Chat = Co(:,1:nop)
+   endif
+endif
 
 do c0 = 0, nd-1, ndc
 nc = min(ndc, nd-c0)
+ncps = 4*((nc+3)/4)
+if (twoleg) then
+   allocate(K2T(ncps*n,nop), K2q(ncps*n,nop))
+   K2T = 0.0d0
+   K2q = 0_16
+   nk2l = (nop+7)/8
+   allocate(k2lk(nk2l))
+   do ik2 = 1,nk2l
+      call omp_init_lock(k2lk(ik2))
+   enddo
+endif
 if (proj) then
    allocate(Dp(1,1,1), KT(nrow*nc,n), Lt(nop*nc,n), CoT(nop,n))
    CoT = transpose(Co(:,1:nop))
@@ -202,6 +438,8 @@ if (proj) then
    do kk = 1,n
       do m = 1,nc
          Lt(nop*(m-1)+1:nop*m,kk) = Lf(kk,:,c0+m)
+         if (allocated(cosx_batch_zsign)) Lt(nop*(m-1)+1:nop*m,kk) = cosx_batch_zsign(c0+m)*Lt(nop*(m-1)+1:nop*m,kk)
+         if (allocated(cosx_lz)) Lt(nop*(m-1)+1:nop*m,kk) = cosx_lz(kk,:,c0+m)
       enddo
    enddo
    !$omp end parallel do
@@ -466,10 +704,24 @@ if (btime) print '(A,7F8.3)', " COSX COOP wall: AO+Q / R / zero A / ints / A.R /
 deallocate(XdS, RRS, AsubS, HcS, YbS, ZbS, FgmS, shofs, runA, runL, tl0, tln, envGS)
 if (allocated(QbS)) deallocate(QbS)
 else
-!$omp parallel default(shared) reduction(+:tb) private(tb0,tbusy) &
+dynblk = kshr
+block
+   character(len=8) :: edyn
+   call get_environment_variable("ENGINE_COSX_DYNBLK", edyn)
+   if (trim(edyn) .eq. "0") dynblk = .false.
+end block
+if (dynblk) then
+   call omp_set_schedule(omp_sched_dynamic, 1)
+else
+   call omp_set_schedule(omp_sched_static, 1)
+endif
+!$omp parallel default(shared) reduction(+:tb,tnz,tq,tsc) private(tb0,tbusy,tig,tq0,amx,aij) &
 !$omp&  private(ib,ibo,bstart,nb,g,si,sj,sj_idx,di,dj,i,j,ao_i,ao_j,m,kk,cofs,g0,ng,shls1e,off_grids,nloc) &
 !$omp&  private(nij,esp_eff,r_far,seg_ab,seg_cl,seg_len2,seg_t,xbm,k_bound,sg) &
 !$omp&  private(Xd,Qb,Xc,vdum,RR,OO,Asub,Kloc,KV,Fgm,buf,env_g,int_cache,run_a,run_len,nrun,ir,a0,ACo,Hc,Yb,Zb) &
+!$omp&  private(Aval,AFt,RRt,Twk,swg,Atmp,erow,ecol,itmp,emir,ltmp,ne,ecap,ee,mm2,av,useaf) &
+!$omp&  private(isb,amc,amx2,buf2) &
+!$omp&  private(rptr,cpos,ccol,cidx,acc,kr,Acsr,s8a,s8b,s8c,a8,s4a,ncp,mb,k8,K2loc,Yh,K2qt,ok2,ik2) &
 !$omp&  private(Tk,rg0,cc0,ncc,cend,kg,mg0,mgn,rb0,nrg)
 if (do_var) then
    allocate(KV(n*nc,n))
@@ -487,7 +739,27 @@ if (rsub) then
 else
    allocate(RR(n,ncol*nc,BATCH))
 endif
-allocate(Asub(n,n,nbs), Fgm(0:nBases-1))
+useaf = (proj .and. (nc .lt. nop .or. twoleg)) .or. (cosx_raw .and. .not. proj .and. .not. do_var)
+block
+   character(len=8) :: eaf
+   call get_environment_variable("ENGINE_COSX_AF", eaf)
+   if (trim(eaf) .eq. "0" .and. .not. twoleg) useaf = .false.
+end block
+if (useaf) then
+   ncp = 4*((nc+3)/4)
+   allocate(Asub(1,1,1), swg(nbs), AFt(ncp,n*nbs), RRt(ncp,n), Twk(nc,nop))
+   if (twoleg) then
+      allocate(K2loc(ncp*n,nop), Yh(nbs,nop))
+      K2loc = 0.0d0
+   endif
+   RRt = 0.0d0
+   ecap = 65536
+   allocate(Aval(ecap*nbs), erow(ecap), ecol(ecap), emir(ecap))
+   allocate(rptr(n+1), cpos(n), ccol(2*ecap), cidx(2*ecap), acc(nc), Acsr(2*ecap))
+else
+   allocate(Asub(n,n,nbs))
+endif
+allocate(Fgm(0:nBases-1))
 if (proj .and. rsub) then
    allocate(ACo(n,nop), Hc(nop,nc,BATCH), OO(1,1,1), Yb(nop,nrp), Zb(nop*nc,nrp))
 else if (proj) then
@@ -500,11 +772,16 @@ allocate(run_a(nBases), run_len(nBases))
 Kloc = 0.0d0
 env_g(1:size(env)) = env(1:size(env))
 env_g(9) = cosx_batch_omega
+if (cosx_dual_omega .gt. 0.0d0) then
+   env_g(9) = -cosx_dual_omega
+   env_g(14) = cosx_dual_c
+endif
 off_grids = size(env)
 tbusy = omp_get_wtime()
-!$omp do schedule(static,1)
+!$omp do schedule(runtime)
 do ibo = 1, nblk_p
    ib = border(ibo)
+   if (twoleg .and. useaf) K2loc = 0.0d0
    bstart = blkstart_p(ib) + 1
    nb = blkstart_p(ib+1) - blkstart_p(ib)
    nloc = 0
@@ -619,7 +896,14 @@ do ibo = 1, nblk_p
       do si = 0,nBases-1
          Fgm(si) = maxval(abs(RR(cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si),:,rg0+1:rg0+ng)))
       enddo
-      Asub(:,:,1:ng) = 0.0d0
+      if (useaf) then
+         ne = 0
+         do g = 1,ng
+            swg(g) = sign(1.0d0,w_p(bstart+g0+g-1))
+         enddo
+      else
+         Asub(:,:,1:ng) = 0.0d0
+      endif
       tb(2) = tb(2) + (omp_get_wtime()-tb0) ; tb0 = omp_get_wtime()
       do si = 0,nBases-1
          di = cosx_shell_dim(si)
@@ -642,10 +926,67 @@ do ibo = 1, nblk_p
                esp_eff = cosx_esp_bound(si,sj)
             endif
             k_bound = xbm*esp_eff*max(Fgm(si),Fgm(sj))
+            if (cosx_dual_omega .gt. 0.0d0) k_bound = k_bound*(1.0d0 + abs(cosx_dual_c))
             if (k_bound .lt. kscr_loc) cycle
+            amc = -1.0d0
+            if (usepc .and. useaf) then
+               isb = cosx_pc_sboff(ib) + g0/nbs + 1
+               amc = real(cosx_pcache(sj_idx, isb, pslot), 8)
+               if (amc .ge. 0.0d0 .and. xbm*amc*max(Fgm(si),Fgm(sj)) .lt. kscr_loc) cycle
+            endif
             dj = cosx_shell_dim(sj)
             shls1e(1) = si ; shls1e(2) = sj ; shls1e(3) = g0 ; shls1e(4) = g0+ng
+            if (btime) tig = omp_get_wtime()
             call grids1e_engine_cached(buf, shls1e, atm, size(atm,2), bas, nBases, env_g, 0_8, int_cache)
+            if (btime) tb(12) = tb(12) + (omp_get_wtime() - tig)
+            if (btime) tnz = tnz + real(di*dj*ng*merge(1,2,si.eq.sj),8)
+            if (btime) then
+               amx = 0.0d0
+               do j = 1,dj
+                  do i = 1,di
+                     aij = NorVEC(cosx_ao_offset(si)+i)*NorVEC(cosx_ao_offset(sj)+j)* &
+                           maxval(abs(buf(1+ng*((i-1)+di*(j-1)):ng*(i+di*(j-1)))))
+                     amx = max(amx, aij)
+                     if (xbm*aij*max(Fgm(si),Fgm(sj)) .lt. kscr_loc) tsc(4) = tsc(4) + real(ng*merge(1,2,si.eq.sj),8)
+                  enddo
+               enddo
+               tsc(1) = tsc(1) + 1.0d0
+               if (xbm*amx*max(Fgm(si),Fgm(sj)) .lt. kscr_loc) then
+                  tsc(2) = tsc(2) + 1.0d0
+                  tsc(3) = tsc(3) + real(di*dj*ng*merge(1,2,si.eq.sj),8)
+               endif
+            endif
+            if (useaf) then
+               if (ne + di*dj .gt. ecap) then
+                  allocate(Atmp(2*ecap*nbs))
+                  do g = 1,ng
+                     Atmp(1+2*ecap*(g-1):ne+2*ecap*(g-1)) = Aval(1+ecap*(g-1):ne+ecap*(g-1))
+                  enddo
+                  call move_alloc(Atmp, Aval)
+                  allocate(itmp(2*ecap)) ; itmp(1:ne) = erow(1:ne) ; call move_alloc(itmp, erow)
+                  allocate(itmp(2*ecap)) ; itmp(1:ne) = ecol(1:ne) ; call move_alloc(itmp, ecol)
+                  allocate(ltmp(2*ecap)) ; ltmp(1:ne) = emir(1:ne) ; call move_alloc(ltmp, emir)
+                  ecap = 2*ecap
+               endif
+               amx2 = 0.0d0
+               do j = 1,dj
+                  ao_j = cosx_ao_offset(sj) + j
+                  do i = 1,di
+                     ao_i = cosx_ao_offset(si) + i
+                     nij = NorVEC(ao_i)*NorVEC(ao_j)
+                     if (nij .eq. 0.0d0) cycle
+                     av = abs(nij)*maxval(abs(buf(1+ng*((i-1)+di*(j-1)):ng*(i+di*(j-1)))))
+                     amx2 = max(amx2, av)
+                     if (xbm*av*max(Fgm(si),Fgm(sj)) .lt. kscr_loc) cycle
+                     ne = ne + 1
+                     erow(ne) = ao_i ; ecol(ne) = ao_j ; emir(ne) = (sj .ne. si)
+                     do g = 1,ng
+                        Aval(ne + ecap*(g-1)) = swg(g)*nij*buf(g + ng*((i-1)+di*(j-1)))
+                     enddo
+                  enddo
+               enddo
+               if (usepc .and. amc .lt. 0.0d0) cosx_pcache(sj_idx, isb, pslot) = real(amx2, 4)
+            else
             do j = 1,dj
                ao_j = cosx_ao_offset(sj) + j
                do i = 1,di
@@ -659,15 +1000,114 @@ do ibo = 1, nblk_p
                   enddo
                enddo
             enddo
+            endif
          enddo
       enddo
       tb(3) = tb(3) + (omp_get_wtime()-tb0) ; tb0 = omp_get_wtime()
-      if (proj) then
+      if (proj .or. useaf) then
+         if (useaf) then
+            if (size(ccol) .lt. 2*ne) then
+               deallocate(ccol, cidx, Acsr)
+               allocate(ccol(2*ecap), cidx(2*ecap), Acsr(2*ecap))
+            endif
+            tq0 = omp_get_wtime()
+            rptr = 0
+            do ee = 1,ne
+               rptr(erow(ee)+1) = rptr(erow(ee)+1) + 1
+               if (emir(ee)) rptr(ecol(ee)+1) = rptr(ecol(ee)+1) + 1
+            enddo
+            rptr(1) = 1
+            do kk = 1,n
+               rptr(kk+1) = rptr(kk+1) + rptr(kk)
+            enddo
+            cpos(1:n) = rptr(1:n)
+            do ee = 1,ne
+               kr = cpos(erow(ee)) ; ccol(kr) = ecol(ee) ; cidx(kr) = ee ; cpos(erow(ee)) = kr + 1
+               if (emir(ee)) then
+                  kr = cpos(ecol(ee)) ; ccol(kr) = erow(ee) ; cidx(kr) = ee ; cpos(ecol(ee)) = kr + 1
+               endif
+            enddo
+            tq(1) = tq(1) + (omp_get_wtime() - tq0)
+            do g = 1,ng
+               tq0 = omp_get_wtime()
+               do kk = 1,n
+                  RRt(1:nc,kk) = RR(kk,1:nc,rg0+g)
+               enddo
+               k8 = ecap*(g-1)
+               tq(2) = tq(2) + (omp_get_wtime() - tq0) ; tq0 = omp_get_wtime()
+               do kk = 1,n
+                  mb = 0
+                  do while (mb .lt. ncp)
+                     if (ncp - mb .ge. 24) then
+                        s8a = 0.0d0 ; s8b = 0.0d0 ; s8c = 0.0d0
+                        do kr = rptr(kk), rptr(kk+1)-1
+                           a8 = Aval(cidx(kr)+k8) ; mm2 = ccol(kr)
+                           s8a = s8a + a8*RRt(mb+1:mb+8,mm2)
+                           s8b = s8b + a8*RRt(mb+9:mb+16,mm2)
+                           s8c = s8c + a8*RRt(mb+17:mb+24,mm2)
+                        enddo
+                        AFt(mb+1:mb+8,kk+n*(g-1)) = s8a ; AFt(mb+9:mb+16,kk+n*(g-1)) = s8b ; AFt(mb+17:mb+24,kk+n*(g-1)) = s8c
+                        mb = mb + 24
+                     else if (ncp - mb .ge. 16) then
+                        s8a = 0.0d0 ; s8b = 0.0d0
+                        do kr = rptr(kk), rptr(kk+1)-1
+                           a8 = Aval(cidx(kr)+k8) ; mm2 = ccol(kr)
+                           s8a = s8a + a8*RRt(mb+1:mb+8,mm2)
+                           s8b = s8b + a8*RRt(mb+9:mb+16,mm2)
+                        enddo
+                        AFt(mb+1:mb+8,kk+n*(g-1)) = s8a ; AFt(mb+9:mb+16,kk+n*(g-1)) = s8b
+                        mb = mb + 16
+                     else if (ncp - mb .ge. 8) then
+                        s8a = 0.0d0
+                        do kr = rptr(kk), rptr(kk+1)-1
+                           s8a = s8a + Aval(cidx(kr)+k8)*RRt(mb+1:mb+8,ccol(kr))
+                        enddo
+                        AFt(mb+1:mb+8,kk+n*(g-1)) = s8a
+                        mb = mb + 8
+                     else
+                        s4a = 0.0d0
+                        do kr = rptr(kk), rptr(kk+1)-1
+                           s4a = s4a + Aval(cidx(kr)+k8)*RRt(mb+1:mb+4,ccol(kr))
+                        enddo
+                        AFt(mb+1:mb+4,kk+n*(g-1)) = s4a
+                        mb = mb + 4
+                     endif
+                  enddo
+               enddo
+               tq(3) = tq(3) + (omp_get_wtime() - tq0) ; tq0 = omp_get_wtime()
+               if (proj) then
+                  call dgemm('N','N',nc,nop,n,1.0d0,AFt(1,1+n*(g-1)),ncp,Co(1,1),n,0.0d0,Twk(1,1),nc)
+                  Hc(:,:,g0+g) = transpose(Twk)
+               else
+                  do kk = 1,n
+                     OO(kk,1:nc,g0+g) = AFt(1:nc,kk+n*(g-1))
+                  enddo
+                  if (allocated(cosx_bra_kind)) then
+                     do mm2 = 1,nc
+                        if (cosx_bra_kind(c0+mm2) .gt. 0) &
+                           OO(1:n,mm2,g0+g) = OO(1:n,mm2,g0+g)*coor_p(cosx_bra_kind(c0+mm2),bstart+g0+g-1)
+                     enddo
+                  endif
+               endif
+               tq(4) = tq(4) + (omp_get_wtime() - tq0)
+            enddo
+            if (twoleg) then
+               call dgemm('T','N',ng,nop,n,1.0d0,Xd(1,g0+1),n,Chat(1,1),n,0.0d0,Yh(1,1),nbs)
+               call dgemm('N','N',ncp*n,nop,ng,1.0d0,AFt(1,1),ncp*n,Yh(1,1),nbs,1.0d0,K2loc(1,1),ncp*n)
+            endif
+         endif
          do g = 1,ng
-            call dgemm('N','N',n,nop,n,1.0d0,Asub(1,1,g),n,Co(1,1),n,0.0d0,ACo(1,1),n)
-            call dgemm('T','N',nop,nc,n,1.0d0,ACo(1,1),n,RR(1,1,rg0+g),n,0.0d0,Hc(1,1,g0+g),nop)
+            if (useaf) then
+               continue
+            else if (nc .lt. nop) then
+               call dgemm('N','N',n,nc,n,1.0d0,Asub(1,1,g),n,RR(1,1,rg0+g),n,0.0d0,ACo(1,1),n)
+               call dgemm('T','N',nop,nc,n,1.0d0,Co(1,1),n,ACo(1,1),n,0.0d0,Hc(1,1,g0+g),nop)
+            else
+               call dgemm('N','N',n,nop,n,1.0d0,Asub(1,1,g),n,Co(1,1),n,0.0d0,ACo(1,1),n)
+               call dgemm('T','N',nop,nc,n,1.0d0,ACo(1,1),n,RR(1,1,rg0+g),n,0.0d0,Hc(1,1,g0+g),nop)
+            endif
          enddo
-      else
+      else if (.not. useaf) then
          do g = 1,ng
             call dgemm('N','N',n,ncol*nc,n,1.0d0,Asub(1,1,g),n,RR(1,1,g0+g),n,0.0d0,OO(1,1,g0+g),n)
          enddo
@@ -695,13 +1135,18 @@ do ibo = 1, nblk_p
    do ir = 1,nrun
       if (proj .and. kshr .and. kshm .eq. 2) then
          exit
-      else if (proj .and. kshr) then
+      else if (kshr) then
          cc0 = run_a(ir)
          cend = run_a(ir) + run_len(ir) - 1
          do while (cc0 .le. cend)
             ncc = min(cend, KCOL*((cc0-1)/KCOL+1)) - cc0 + 1
-            call dgemm('N','T',nop*nc,ncc,nb,1.0d0,Hc(1,1,1),nop*nc,Xd(cc0,1),n, &
-                       0.0d0,Tk,nop*nc)
+            if (proj) then
+               call dgemm('N','T',nop*nc,ncc,nb,1.0d0,Hc(1,1,1),nop*nc,Xd(cc0,1),n, &
+                          0.0d0,Tk,nop*nc)
+            else
+               call dgemm('N','T',n*nc,ncc,nb,1.0d0,OO(1,1,1),n*ncol*nc,Xd(cc0,1),n, &
+                          0.0d0,Tk,n*nc)
+            endif
             call omp_set_lock(klk((cc0-1)/KCOL+1))
             KTq(:,cc0:cc0+ncc-1) = KTq(:,cc0:cc0+ncc-1) + to_q(Tk(:,1:ncc))
             call omp_unset_lock(klk((cc0-1)/KCOL+1))
@@ -719,6 +1164,16 @@ do ibo = 1, nblk_p
                  1.0d0,KV(1,run_a(ir)),n*nc)
    enddo
    tb(5) = tb(5) + (omp_get_wtime()-tb0)
+   if (twoleg .and. useaf) then
+      if (.not. allocated(K2qt)) allocate(K2qt(ncp*n,8))
+      do ik2 = 1,nk2l
+         ok2 = 8*(ik2-1)
+         K2qt(:,1:min(8,nop-ok2)) = to_q(K2loc(:,ok2+1:min(ok2+8,nop)))
+         call omp_set_lock(k2lk(ik2))
+         K2q(1:ncp*n,ok2+1:min(ok2+8,nop)) = K2q(1:ncp*n,ok2+1:min(ok2+8,nop)) + K2qt(:,1:min(8,nop-ok2))
+         call omp_unset_lock(k2lk(ik2))
+      enddo
+   endif
    deallocate(Xd)
    if (allocated(Qb)) deallocate(Qb)
 enddo
@@ -743,6 +1198,10 @@ end block
 tmg = omp_get_wtime() - tbusy
 !$omp end master
 deallocate(Kloc, RR, OO, Asub, Fgm, buf, int_cache, env_g, run_a, run_len)
+if (allocated(buf2)) deallocate(buf2)
+if (allocated(Aval)) deallocate(Aval, erow, ecol, emir, AFt, RRt, Twk, swg, rptr, cpos, ccol, cidx, acc, Acsr)
+if (allocated(K2loc)) deallocate(K2loc, Yh)
+if (allocated(K2qt)) deallocate(K2qt)
 if (allocated(ACo)) deallocate(ACo, Hc, Yb, Zb)
 if (allocated(Tk)) deallocate(Tk)
 if (do_var) deallocate(KV)
@@ -761,6 +1220,21 @@ deallocate(Dp)
 if (allocated(Lt)) deallocate(Lt, CoT)
 if (allocated(LfP)) deallocate(LfP)
 if (proj) then
+   if (twoleg) then
+      K2T = from_q(K2q)
+      do ik2 = 1,nk2l
+         call omp_destroy_lock(k2lk(ik2))
+      enddo
+      deallocate(K2q, k2lk)
+      !$omp parallel do private(m,kk)
+      do m = 1,nc
+         do kk = 1,n
+            cosx_kc2(kk,:,c0+m) = K2T(m + ncps*(kk-1),:)
+         enddo
+      enddo
+      !$omp end parallel do
+      deallocate(K2T)
+   endif
    !$omp parallel do private(m,kk)
    do m = 1,nc
       if (fit) then
@@ -775,7 +1249,7 @@ if (proj) then
 else
 !$omp parallel do private(m,kk)
 do m = 1,nc
-   if (fit) then
+   if (fit .and. .not. (allocated(cosx_bra_kind) .and. cosx_bra_kind(c0+m) .gt. 0)) then
       call dgemm('N','T',n,n,n,1.0d0,KT(n*(m-1)+1,1),n*nc,QfullT_p(1,1),n,0.0d0,K(1,1,c0+m),n)
    else
       do kk = 1,n
@@ -794,13 +1268,18 @@ deallocate(KT)
 if (do_var) deallocate(KVs)
 tw(3) = tw(3) + (omp_get_wtime()-tw0) ; tw0 = omp_get_wtime()
 enddo
-if (btime) print '(A,5F9.2)', " COSX BATCH (thread-s) D.x / screen+zero / ints+scatter / A.R / K acc:", tb(1:5)
+if (btime) print '(A,5F9.2,A,F9.2)', " COSX BATCH (thread-s) D.x / screen+zero / ints+scatter / A.R / K acc:", tb(1:5), &
+                 "  of which ints", tb(12)
+if (btime) print '(A,4ES10.3)', " COSX BATCH pairs / below with max|A| / their el*pts / el*pts below:", tsc
+if (btime) print '(A,ES10.3,A,4F8.2)', " COSX BATCH A elements x points:", tnz, &
+                 "  useaf sort / F^T / SpMM / dgemm thread-s", tq
+if (btime) call flush(6)
 if (btime) print '(A,4F7.3)', " COSX BATCH (g,m) columns max|D_m x_g| >= 1e-6/-7/-8/-9:", tb(8:11)/max(tb(7),1.0d0)
 
 call get_environment_variable("ENGINE_CPSCF_COSX_UNSYM", envs)
 if (proj) then
    continue
-else if (trim(envs) .eq. "1" .and. .not. do_var) then
+else if ((trim(envs) .eq. "1" .or. cosx_raw) .and. .not. do_var) then
    !$omp parallel do private(m)
    do m = 1,nd
       K(:,:,m) = transpose(K(:,:,m))
@@ -815,6 +1294,7 @@ enddo
 !$omp end parallel do
 endif
 deallocate(border, bcost)
+if (allocated(Chat)) deallocate(Chat)
 if (kshr) then
    do kk = 1,size(klk)
       call omp_destroy_lock(klk(kk))

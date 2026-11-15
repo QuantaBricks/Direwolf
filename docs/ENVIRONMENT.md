@@ -36,14 +36,12 @@ is now the unconditional default (2026-09-19 — dropped the earlier
 | Variable | Values | Meaning |
 |---|---|---|
 | `ENGINE_GRID_CACHE` | `0` / `1` | Force DIRECT (`0`) or STORE (`1`). Unset *(default)*: DIRECT, regardless of system size. |
-| `ENGINE_XC_DYNGRID` | `0` / `1` | Two-stage grid: run early SCF iterations on a radially reduced grid, then promote to the production grid. Unset *(default)*: on when `nconts > 500`, independent of the STORE/DIRECT choice above (decoupled from it 2026-08-26 — see the comment at its call site in engine.f90 for why: a small system's STORE cache is cheap enough to just build once at full density, so the coarse-then-promote dance isn't worth it there regardless of which mode is active). A small system now runs plain single-stage DIRECT by default; DYNGRID kicking in is what actually changes above the 500-function line. |
-| `ENGINE_XC_DYNGRID_PRMS` | real | Density-RMS threshold at which to promote. Default `3e-4`. Switching *later* is monotonically worse — the coarse grid's converged solution is a fixed point of the wrong operator. |
-| `ENGINE_XC_DYNGRID_RSCALE` | real | Coarse-stage radial scale factor. Default `0.60` (production is `1.848`). |
-| `ENGINE_XC_DYNGRID_SPH` | `434`/`302`/`230`/`170` | Coarse-stage base Lebedev order. Default `434`, i.e. **unchanged from production**. Reducing it is a trap: 434→302 costs a fixed 5-6 extra SCF iterations at every radial scale tried. Take the saving from the radial axis only. |
 
-The promotion happens *before* that iteration's `DFT_calc`, so the
-converged energy is defined by the production grid alone (verified to
-within ~1e-10 Ha against a fixed-fine-grid run).
+The classic two-stage (coarse -> production) grid and the classic L1-L7 levels were retired on 2026-10-21: the theory-table cell below is the only XC grid. `ENGINE_XC_DYNGRID*`, `ENGINE_XC_GRID_LEVEL*`,
+`ENGINE_XC_PROD_*` and `ENGINE_XC_USE_THEORY_TABLE=0` no longer exist (the last one is ignored with a notice). A converged
+reference grid for convergence checks is the cell with large `ENGINE_XC_TUNE_RS` and `ENGINE_XC_TUNE_Z434`/`_Z302` (for
+example `ENGINE_XC_TUNE_RS="2 2 2 2 2 2 2"`, `ENGINE_XC_TUNE_Z434="110 302 590 770 590"`, same for `_Z302`: CH3+ CAM-B3LYP
+carbon converged to 0.001 ppm, 146k points).
 
 ## Alternative XC build paths (experimental, off by default)
 
@@ -53,7 +51,7 @@ within ~1e-10 Ha against a fixed-fine-grid run).
 | `ENGINE_XC_PSCREEN` | real | Density-change screening threshold for the shell-pair path. |
 | `ENGINE_XC_INCR` | `1` | Incremental Vxc against a stored reference density (shell-pair path only). |
 
-## XC grid theory-table (default ON for most functionals since 2026-09-19)
+## XC grid theory-table (the only XC grid since 2026-10-21; default ON since 2026-09-19)
 
 A second, per-functional XC grid construction that replaces the classic
 COARSE/FINE/L4-L7 tiers with a LEVEL (functional family) x TIER
@@ -61,30 +59,23 @@ COARSE/FINE/L4-L7 tiers with a LEVEL (functional family) x TIER
 budgets on a 33-molecule period-2 set plus a handful of individually
 validated heavier elements.
 
-**This is now the default construction for most functionals** (flipped
-2026-09-19, once `xcgrid_zone_calibrated_for()` closed the last
-correctness gap - see "Safe fallback" below). `ENGINE_XC_USE_THEORY_TABLE`
-unset entirely means: ON for anything with a real, measured LEVEL
-(everything under SMOOTHDFT's case-default - B3LYP/PBE/PBE0/BLYP/BP86/
-TPSS/CAM-B3LYP/etc - plus R2SCAN/R2SCAN-3C/WB97X-D/WB97M-V and, since
-2026-09-19/30, M06/M06-2X/M06-L); `xcgrid_theory_default_on()`
-(mod_data.f90) is the authoritative list and currently has no off-list.
+**This is the only construction** (default since 2026-09-19, once `xcgrid_zone_calibrated_for()` closed the last
+correctness gap - see "Safe fallback" below; the classic grids were retired 2026-10-21). Every functional takes a
+measured LEVEL (everything under SMOOTHDFT's case-default - B3LYP/PBE/PBE0/BLYP/BP86/TPSS/CAM-B3LYP/etc - plus
+R2SCAN/R2SCAN-3C/WB97X-D/WB97M-V and M06/M06-2X/M06-L).
 R2SCAN-3C has its own LEVEL `R2SCAN3C` (2026-10-06): LO and HIGH are
 R2SCAN's, REGULAR keeps R2SCAN's angular zones with R2SCAN/HIGH's radial
 scales, because the mTZVPP basis needs a finer radial grid than the def2-SVP
 the R2SCAN cells were calibrated on (paracetamol 7.3e-5 -> 2.8e-6 Ha against
 an L7 grid, omeprazole 1.5e-4 -> 1.0e-5, +26% wall time).
-An explicit `ENGINE_XC_USE_THEORY_TABLE=1`/`=0` always overrides this
-either direction, for anyone who wants theory-table on M06 anyway (not
-unsafe, just unmeasured) or wants it off entirely regardless of
-functional.
+`runtype nmr` (and nothing else) runs its SCF on the cell with every zone order raised to at least 26/74/194/194/110 and
+the H peak to 194 (`xcgrid_nmr_zone`, mod_data.f90): the shielding is more sensitive to the grid than the energy.
 
 | Variable | Values | Meaning |
 |---|---|---|
-| `ENGINE_XC_USE_THEORY_TABLE` | `1` / `0` | Force on or off. Unset: on for a measured LEVEL, off otherwise - see above. |
 | `ENGINE_XC_THEORY_LEVEL` | `SMOOTHDFT`/`R2SCAN`/`R2SCAN3C`/`WB97XD`/`WB97MV`/... | Functional family. Auto-inferred from the input file's `functional` if unset. |
 | `ENGINE_XC_THEORY_TIER` | `LO`/`REGULAR`/`HIGH` | Accuracy tier. Default `REGULAR`. |
-| `ENGINE_XC_THEORY_DYNAMIC` | `1` | Promote LO→REGULAR mid-SCF (mirrors `ENGINE_XC_DYNGRID` above, theory-table-specific). Off by default. |
+| `ENGINE_XC_THEORY_DYNAMIC` | `1` | Promote LO→REGULAR mid-SCF (theory-table-specific). Off by default. |
 
 **Coverage as of 2026-09-19** (see `data/xcgrid_theory_levels.h` and
 `src/core/mod_data.f90`'s `xcgrid_theory_apply()` for the authoritative,
@@ -129,8 +120,9 @@ worst case it behaves exactly like production default.
 
 ## Density fitting / force mode overrides
 
-These override the automatic memory-based STORE-vs-DIRECT decision for
-the DF tensors. Useful for reproducing a mode on a machine where the
+RI-J is DIRECT by default whatever the functional (pure or hybrid) and also in the analytic
+Hessian; only RI-K (`K = 'RI'`) still decides STORE vs DIRECT by memory. These override that
+decision for the DF tensors. Useful for reproducing a mode on a machine where the
 estimate would pick the other one.
 
 | Variable | Values | Meaning |
@@ -225,6 +217,79 @@ and the added branch broke auto-vectorization for all of them). The O(N^2)
 kernel is at its practical floor for this grid representation; a real
 further speedup would need a different algorithm (FMM/multipole), which
 is out of scope as a quick optimization.
+
+## XC grids of open-shell references (2026-10-14)
+
+The theory-table cells were calibrated on closed-shell molecules (energy only). With an unpaired electron in a
+heavy-atom p orbital the frontier orbital energies were off by up to 1e-4 Ha on small radicals (OH, NH2, CH2) while
+the energy was off by 1e-5, and the first CH2 TDDFT excitation by 7e-4. Against pyscf at level 9 (14 small molecules,
+PBE/B3LYP/r2SCAN, def2-SVP) the frontier-orbital errors are now <= 1e-5 (PBE, B3LYP) and <= 4e-5 (r2SCAN):
+- `ENGINE_XC_OPEN_ZONE2` (default 110) / `ENGINE_XC_OPEN_ZONE3` (default 194): lowest Lebedev order of the second and
+  third radial zone when imult > 1 (REGULAR cell: 38/110; +6 to +13 % points). 0 turns it off.
+- `ENGINE_XC_OPEN_META_HIGH_NMAX` (default 4): r2SCAN with imult > 1 uses the HIGH cell instead of REGULAR up to this
+  many atoms (OH, NH2, CH2: 1.4e-4 -> 3-4e-5; +65 % points); `ENGINE_XC_OPEN_META_HIGH=0` keeps REGULAR throughout. From 5
+  atoms on REGULAR with the zone raise is within 2.3e-5 Ha of pyscf level 9 (CH3O 1.5e-5, C2H5 8.8e-6, benzene cation
+  9.4e-6, caffeine cation 2.3e-5 against HIGH 1.2e-5, 9.0e-6, 6.4e-6, 1.8e-5 at twice the points).
+- The TDDFT kernel grid of an open-shell reference has zones 4/5 and the H peak raised to 350/146/194 (it was
+  110/86/50; first CH2 excitation 1.9e-4 -> 4e-5 Ha off).
+Closed-shell references are unchanged.
+
+## RI-J three-centre integrals in Hermite form (2026-10-13)
+
+- `ENGINE_DFJ_MD=0`: evaluate the DIRECT RI-J three-centre integrals with libcint, one call per (pair, aux shell)
+  triple, as before. By default (`src/integrals/df/mdj.c`) each shell pair's density (b-pass) or the fitted
+  potential (J-pass) is contracted with the pair's McMurchie-Davidson Hermite expansion once per primitive pair,
+  and the per-aux work is the Hermite Coulomb tensor R_{t+t'} only, eight aux primitives per SIMD block (the
+  Split-RI-J arrangement). Same screening as the libcint path; b and J agree with it to 1e-13 relative.
+  Imatinib PBE/def2-SVP, 24 threads, 16 builds: b+J passes 16.4 -> 3.9 s, SCF 26.9 -> 14.6 s, converged energy
+  identical to 1e-9 Ha. Shells with general contraction, orbital l > 4 or aux l > 6 fall back to libcint.
+  `=2` runs both and prints the largest b and J differences per build (validation).
+  The analytic Hessian's RI-J terms use it too (`hess_2e_df_j`: b and its first derivatives, the second-derivative
+  contraction c.b_xy; `hess_df_j_fock`: the first-derivative Fock matrices Jx). Derivatives of the orbital centres are
+  shifts of the Hermite expansion (D_A,x f(i) = 2a f(i+e_x) - i_x f(i-e_x)); the aux centre follows from
+  d_C = -(d_A + d_B), per aux atom through V^K, the Hermite potential of the aux functions on atom K. Both routines
+  share b, b_x and M_x c for one density (cache keyed on P and the geometry). Fluoxetine PBE/def2-SVP frequencies, 24
+  threads: hess_2e_df_j 4.25 -> 1.20 s, hess_df_j_fock 2.68 -> 0.92 s, wall 95.3 -> 80.9 s (the CPSCF batch fix
+  included); caffeine 25.4 -> 23.1 s; Hessian matrices equal to 7e-11. Per thread the first-derivative sums take
+  natoms*3*ghs*8 bytes (`ENGINE_DFJ_MD_HESS_GB`, default 3 in all; above it the libcint pass 1 runs);
+  `ENGINE_DFJ_MD_JX=0` keeps libcint for Jx only; `=2` prints the differences of b, b_x and the second derivatives.
+  The batched DIRECT build of TDDFT / CPSCF (`df_build_coulomb_direct_batch_c`) uses the same kernel with one R
+  table per (primitive pair, aux block) for all densities of the batch (water TDDFT and frequencies identical).
+  The DIRECT RI-J gradient uses it too (`df_mdj_force_j`): orbital centres from d/dA G_i = 2a G_{i+1} - i G_{i-1}
+  against the pair's Hermite potential, aux centres from the same potential at t + e_x, shell pairs in parallel
+  (the libcint version was serial). Imatinib PBE/def2-SVP: RI-J gradient 4.57 -> 0.50 s, whole gradient
+  6.0 -> 1.9 s; water forces equal to 4e-14. With `=2` the three-centre forces of both kernels are compared.
+
+## COSX for range-separated hybrids in one pass (2026-10-13)
+
+- `ENGINE_COSX_DUAL=0`: build the full-range and the long-range (erf) COSX exchange as two passes again. By
+  default every COSX build of a range-separated hybrid with a full-range part (CAM-B3LYP, wB97X, ...) - SCF K,
+  gradient, analytic Hessian, CPSCF response, TDDFT - evaluates the operator 1/r + (beta/alpha) erf(omega r)/r in
+  one libcint quadrature (`third_party/libcint/src/g1e_grids.c`, env[13]) and contracts once. Caffeine
+  CAM-B3LYP/def2-SVP, 24 threads: energy+gradient 27.2 -> 24.1 s, frequencies 153 -> 115 s; energy 2e-7 Ha,
+  gradient 2e-6 Ha/bohr, frequencies 0.015 cm-1 from the two-pass result (the screening bound is scaled by
+  1 + |beta/alpha|).
+
+## COSMO cavity
+
+`ENGINE_COSMO_MIN_AREA` (1e-4): tesserae smaller than this many Angstrom^2 are left out of the charge solve, in the energy, the force and the
+Hessian alike; 0 keeps all of them. With `verbose = 2` the run notes pairs of nearly coincident tesserae (sliver pairs next to the intersection
+circle of two spheres, the conductor matrix is then close to singular or indefinite): the solvation energy has a spike a few 1e-4 Angstrom wide
+in the geometry there, so a finite-difference gradient over a larger step differs from the analytic one (up to ~5e-4 Ha/bohr in a test, which is
+not an error of the analytic gradient: dense energy scans show the spike). About 3 in 8 small molecules have such a pair at the default radii.
+
+## TDDFT Davidson: scaled directions
+
+`ENGINE_TDDFT_SCALE=1` (default off): in the paired (A+B)/(A-B) solver of hybrid functionals each new direction is applied at the size it had before
+normalisation (at least 1e-4), so that the absolute COSX screen cuts the products of the late, small corrections, and the product is scaled back.
+That divides the absolute screening error by the scale: imatinib PBE0/def2-SVP, 10 roots, CPU, residuals stuck at 5e-4 .. 1e-3, 175 iterations, 782 s
+and seven spurious dark roots (0.62 .. 3.09 eV); without it 12 iterations, 138 s and all ten roots equal to the reference program's. Caffeine PBE0
+(3 roots) K 4.44 -> 3.64 s with it, which is what it was added for.
+
+## TDDFT hole / electron analysis
+
+`ENGINE_TDDFT_CT_H` (0.35) and `ENGINE_TDDFT_CT_POINTS` (600000): the smallest grid spacing (bohr) and the largest number of grid points of the
+hole / electron measures that need no cube files (docs/INTERFACE.md, "Hole and electron of the TDDFT states"); the grid is coarsened to fit.
 
 ## COSX analytic Hessian and the CPSCF response (2026-09-28)
 
@@ -419,7 +484,48 @@ operator-centre first derivative were missing (CH3I def2-TZVPP vs pyscf
 2.35e3, now 2e-5). Also fixed the same day: def2-SVP / TZVP / QZVP / TZVPD
 silently had no ECP for Z >= 37 (only def2tzvpp.ecp exists in data/bases).
 
+
 ---
+
+## Numerical thresholds and block sizes
+
+Accuracy/speed knobs that were only in the source. Defaults are the built-in
+values; unset means the default. All are read as plain numbers. The defaults are
+calibrated together (see the TOML snapshot: a run records every one you set), so
+change one only with a reference at hand.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `ENGINE_COSX_KSCREEN` | `1e-7` | COSX K-build pair/point screening threshold (energy builds) |
+| `ENGINE_COSX_KSCREEN_FORCE` | `1e-9` | the same threshold after the SCF of a gradient run, so the force differentiates the build that produced the energy |
+| `ENGINE_COSX_KSCREEN_INCR` | `1e-9` | threshold of the incremental K updates |
+| `ENGINE_COSX_GRAD_KSCREEN` | `10 x` the force threshold | screening of the COSX gradient integrals |
+| `ENGINE_COSX_GRAD_KPAIR` | `1e-2 x` `..._GRAD_KSCREEN` | shell-pair bound of the COSX gradient; `..._GRAD_KSCREEN_LR` / `..._GRAD_KPAIR_LR` are the range-separated (omega > 0) counterparts |
+| `ENGINE_COSX_EXT_THRESHOLD` | `1e-6` | density-change threshold below which the COSX extrapolation is used |
+| `ENGINE_COSX_DP_SKIP` | `1e-6` | density-change threshold below which a COSX block is skipped in an incremental build |
+| `ENGINE_COSX_BLKRAD` | none (`1e30`) | upper limit on the radius of a COSX grid block (bohr) |
+| `ENGINE_COSX_INCR_DMAX` | on | `0` scales the incremental K threshold by the largest density change off |
+| `ENGINE_COSX_HESS_KSCREEN2` | `10 x` the Hessian K threshold | second-derivative pair bound of the COSX Hessian |
+| `ENGINE_COSX_HESS_KSCREENK` | `1e-8` | pair bound of dK/dR in the COSX Hessian |
+| `ENGINE_COSX_HESS_SYMEM` | `512e6` | memory budget (bytes) of the per-atom S^y/P^y slices in the COSX Hessian; sets the atom batch |
+| `ENGINE_COSX_HESS_BLKPTS` | internal batch | grid points per block in the COSX Hessian |
+| `ENGINE_CPSCF_COSX_NBS` | internal | number of response vectors per COSX batch |
+| `ENGINE_NEWTON_KFAC` | `1` | factor on the COSX screening of the response K |
+| `ENGINE_DIIS_COEFMAX` | `1e6` | largest DIIS coefficient accepted |
+| `ENGINE_DIIS_RCOND` | `1e-14` | reciprocal condition limit of the DIIS matrix |
+| `ENGINE_INCR_FULL_PERIOD` | `20` | cycles between full (non-incremental) J/K rebuilds |
+| `ENGINE_INCR_SCREEN_SCALE` / `..._SCALE_J` | `1` | factor on the density-change screening of the incremental K / J |
+| `ENGINE_INCR_SCREEN_ABS` | off | absolute screening cutoff of the incremental J/K; diagnostic only, not bit-exact at convergence |
+| `ENGINE_FULL_SCREEN_SCALE` | `1` | factor on the screening of the full builds |
+| `ENGINE_FORCE_SCREEN_CUTOFF` | `1e-9` | density cutoff of the force integrals |
+| `ENGINE_FORCE_XC_SIG` | `1e-7` | basis-function significance cutoff of the XC force |
+| `ENGINE_XC_SCREEN_EPS` | `1e-7` | basis-function value cutoff on the XC grid |
+| `ENGINE_XC_SIG_CUTOFF` | built-in | significance cutoff of the XC density build |
+| `ENGINE_XC_PAIR_CUTOFF` | built-in | pair cutoff of the Becke partition weights |
+| `ENGINE_ESP_PSCREEN` | `0` (off) | density-matrix cutoff of the COSMO/ESP point integrals; measured to save under 3 % |
+| `ENGINE_DFJ_MD_NBMAX` | `40` | most auxiliary-function batches per RI-J Hermite pass |
+| `ENGINE_OPT_RGROW` | built-in | trust-radius growth factor of the optimizer |
+| `ENGINE_TD_GRID_RS` / `..._Z` / `..._H` | table | radial scale, angular orders and hydrogen entries of the TDDFT kernel grid (grid-table tuning) |
 
 ## Input-file equivalent: the `&professional` namelist
 
@@ -439,13 +545,13 @@ internally.
 | `&professional` field | Env var it sets |
 |---|---|
 | `prof_grid_cache` (`0`/`1`) | `ENGINE_GRID_CACHE` |
-| `prof_xc_dyngrid` (`0`/`1`) | `ENGINE_XC_DYNGRID` |
-| `prof_xc_dyngrid_prms` (real) | `ENGINE_XC_DYNGRID_PRMS` |
-| `prof_xc_dyngrid_rscale` (real) | `ENGINE_XC_DYNGRID_RSCALE` |
-| `prof_xc_dyngrid_sph` (integer) | `ENGINE_XC_DYNGRID_SPH` |
 | `prof_xc_shellpair` (`1`) | `ENGINE_XC_SHELLPAIR` |
 | `prof_xc_pscreen` (real) | `ENGINE_XC_PSCREEN` |
 | `prof_xc_incr` (`1`) | `ENGINE_XC_INCR` |
+| `prof_xc_grid_tier` (`'LO'`/`'REGULAR'`/`'HIGH'`) | `ENGINE_XC_THEORY_TIER` |
+| `prof_level_shift` (Ha) | `ENGINE_LEVEL_SHIFT` |
+| `prof_opt_hess` (`'full'`) | `ENGINE_OPT_HESS` (coupled Lindh Hessian in the optimizer) |
+| `prof_p86_vwn` (`1`) | `ENGINE_P86_VWN` |
 | `prof_incremental_fock` (`0`/`1`) | `ENGINE_INCREMENTAL_FOCK` |
 | `prof_diis_window` (integer) | `ENGINE_DIIS_WINDOW` |
 | `prof_force_df_direct` (`1`) | `ENGINE_FORCE_DF_DIRECT` |
@@ -455,9 +561,6 @@ internally.
 | `prof_vv10_angular` (Lebedev order) | `ENGINE_VV10_ANGULAR` |
 | `prof_vv10_rcut` (bohr) | `ENGINE_VV10_RCUT` |
 | `prof_vv10_rhocut` (real) | `ENGINE_VV10_RHOCUT` |
-| `prof_xc_grid_level` (`2`-`7`) | `ENGINE_XC_GRID_LEVEL` (picks a matched coarse+fine PAIR) |
-| `prof_xc_grid_level_coarse` (`2`-`7`) | `ENGINE_XC_GRID_LEVEL_COARSE` (coarse side only, independent of fine) |
-| `prof_xc_grid_level_fine` (`2`-`7`) | `ENGINE_XC_GRID_LEVEL_FINE` (fine/production side only, independent of coarse) |
 | `prof_cosx_hi_level` (`1`/`2`/`3`) | sets `ENGINE_COSX_NRAD`/`NSPH` from a preset (coarser/**default**/finer than COSX's "hi" grid, 18/194) |
 | `prof_cosx_md_level` (`1`/`2`/`3`) | sets `ENGINE_COSX_NRAD_MD`/`NSPH_MD` from a preset (coarser/**default**/finer than "md", 14/110) |
 | `prof_cosx_lo_level` (`1`/`2`/`3`) | sets `ENGINE_COSX_NRAD_LO`/`NSPH_LO` from a preset (coarser/**default**/finer than "lo", 14/50) |
@@ -503,26 +606,16 @@ Reproduce the old always-STORE behaviour:
 
     ENGINE_GRID_CACHE=1 ./Engine job.inp job.out
 
-Run DIRECT on a small system, with the two-stage grid (it follows
-DIRECT automatically):
+Run DIRECT on a small system:
 
     ENGINE_GRID_CACHE=0 ./Engine job.inp job.out
 
-Run DIRECT but with a fixed production grid throughout, e.g. to measure
-what the two-stage grid is worth:
-
-    ENGINE_GRID_CACHE=0 ENGINE_XC_DYNGRID=0 ./Engine job.inp job.out
-
-Scan the coarse stage:
-
-    ENGINE_GRID_CACHE=0 ENGINE_XC_DYNGRID_RSCALE=0.40 \
-    ENGINE_XC_DYNGRID_PRMS=1e-3 ./Engine job.inp job.out
 
 ## Newton-CG SCF
 
 Newton-CG orbital steps (finite-difference Fock Hessian-vector products, preconditioned CG) replace DIIS from a given SCF cycle onward, once the orbital gradient RMS is below `ENGINE_NEWTON_START` (default 5e-3).
 
-- Gaussian-style route token `Newton-CG=N` (or TOML `newton_cg = N`, env `ENGINE_NEWTON_ITER`): first cycle that uses Newton-CG. Default 64; `0` disables completely.
+- input key `newton_cg = N` in `&molecule` (also the TOML key, the Gaussian-style route token `Newton-CG=N`, env `ENGINE_NEWTON_ITER`): first cycle that uses Newton-CG. Default 64; `0` disables completely.
 - `ENGINE_NEWTON=1`: force Newton-CG from cycle 3.
 - `ENGINE_NEWTON_CGTOL`: CG relative residual tolerance (default 0.1).
 - `ENGINE_NEWTON_START`: orbital-gradient threshold below which a Newton step is taken (default 5e-3). Larger values start earlier and are much less stable.

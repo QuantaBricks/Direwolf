@@ -299,8 +299,7 @@ INCLUDE 'parameter.h'
   end block
 
   dbgenv = ""
-  call get_environment_variable("ENGINE_GTO_PROGRESS", dbgenv)
-  gto_progress_debug = (trim(dbgenv) .eq. "1")
+  gto_progress_debug = (engine_verbose .ge. 2)
   call system_clock(count_rate=gto_wc_rate)
   call system_clock(gto_wc_start)
   !$omp parallel private(k) firstprivate(gto_wc_start,gto_wc_rate)

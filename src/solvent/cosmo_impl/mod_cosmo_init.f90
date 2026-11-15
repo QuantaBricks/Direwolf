@@ -77,7 +77,8 @@ integer :: kk, n_kept
 real(8) :: area_ang2
 real(8),allocatable :: tc2(:,:), ta2(:)
 integer,allocatable :: tat2(:)
-real(8),parameter :: MIN_TESS_AREA_ANG2 = 1.0d-4
+real(8) :: MIN_TESS_AREA_ANG2
+MIN_TESS_AREA_ANG2 = cosmo_min_tess_area_ang2()
 n_kept = 0
 do kk = 1,n_tess
    area_ang2 = tess_area(kk)*bohr2ang*bohr2ang
@@ -106,7 +107,11 @@ end block
 
 print '("COSMO: cavity built (",A,") - ",I0," atoms, ",I0," surface tesserae, eps=",F8.2)', &
       trim(cavity_type), natoms, n_tess, epsilon
-f_eps = (epsilon-1.0d0)/(epsilon+0.5d0)
+if (cosmo_cpcm) then
+   f_eps = (epsilon-1.0d0)/epsilon
+else
+   f_eps = (epsilon-1.0d0)/(epsilon+0.5d0)
+endif
 
 allocate(V_nuc(n_tess))
 do k = 1,n_tess
@@ -130,6 +135,30 @@ do k = 1,n_tess
    enddo
 enddo
 !$omp end parallel do
+
+block
+real(8) :: rho, rho_max
+integer :: kb, lb, n_close
+logical :: verbose2
+rho_max = 0.0d0 ; kb = 0 ; lb = 0 ; n_close = 0
+do k = 1,n_tess
+   do l = k+1,n_tess
+      rho = A_fac(k,l)/sqrt(A_fac(k,k)*A_fac(l,l))
+      if (rho > 0.9d0) n_close = n_close + 1
+      if (rho > rho_max) then
+         rho_max = rho ; kb = k ; lb = l
+      endif
+   enddo
+enddo
+call cosmo_verbose2(verbose2)
+if (n_close > 0 .and. verbose2) then
+   print '("COSMO: note - ",I0," pair(s) of nearly coincident tesserae (worst: atoms ",I0," and ",I0,")")', &
+         n_close, tess_atom(kb), tess_atom(lb)
+   print '("       centres ",F7.4," bohr apart, A_kl/sqrt(A_kk A_ll) = ",F6.3)', &
+         sqrt(sum((tess_coor(:,kb)-tess_coor(:,lb))**2)), rho_max
+   print '("       the cavity matrix is close to singular or indefinite here: narrow spike in the energy")'
+endif
+end block
 
 allocate(A_ipiv(n_tess))
 call dsytrf('U', n_tess, A_fac, n_tess, A_ipiv, wsize, -1, info)
@@ -163,5 +192,11 @@ q_last = 0.0d0
 cosmo_enabled = .true.
 deallocate(coor_bohr)
 end subroutine cosmo_init
+
+subroutine cosmo_verbose2(v)
+use MOL_info, only: engine_verbose
+logical,intent(out) :: v
+v = engine_verbose >= 2
+end subroutine cosmo_verbose2
 
 end module mod_cosmo_init

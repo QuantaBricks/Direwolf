@@ -61,6 +61,7 @@ end subroutine gridgen_from_file
 subroutine gridgen(info)
 use MOL_info
 use GRID_info
+use omp_lib, only: omp_get_wtime
     implicit none
 INCLUDE 'parameter.h'
     interface
@@ -89,24 +90,37 @@ INCLUDE 'parameter.h'
     character(len=32) :: pcenv
     real(8) :: pcval
     integer :: pcios
-    real(8),allocatable    :: Rij(:,:),aij_mat(:,:)
+    real(8),allocatable    :: Rij(:,:),aij_mat(:,:),Rinv(:,:),Aat_b(:,:)
+    integer,allocatable    :: adj_start(:), adj_list(:)
     real(8),allocatable    :: rdist(:)
+    logical :: becke_pairs
+    logical,parameter :: BECKE_PRUNED = .false.
+    character(len=8) :: bpenv
+    real(8) :: bfrac
     real(8)    :: chi,uij,aij
 
     real(8),allocatable    :: Pvec(:)
     integer,allocatable    :: atom_offset(:)
     integer :: atom_npts
+    real(8) :: tg0, tg1, tg2, tg3, tgb0, tgb1, tgb2
+    logical :: becke_dev
+    integer,allocatable :: pt_atom(:)
 
 call get_environment_variable("ENGINE_XC_PAIR_CUTOFF", pcenv)
 if (len_trim(pcenv) > 0) then
    read(pcenv, *, iostat=pcios) pcval
    if (pcios == 0 .and. pcval > 0.0d0) PAIR_CUTOFF = pcval
 endif
+becke_pairs = .false.
+call get_environment_variable("ENGINE_XC_BECKE_PAIRS", bpenv)
+if (len_trim(bpenv) > 0 .and. trim(bpenv) /= '0') becke_pairs = .true.
 
+   tg0 = omp_get_wtime()
    call gridgen_count_points(totGrid, grdRec)
    if (.not. engine_quiet) print '(A,I0)',"  VXC grid points: ",totGrid
    call flush(6)
    nGrids = totGrid
+   tg1 = omp_get_wtime()
    if (allocated(Grids)) deallocate(Grids)
    allocate(Grids(totGrid))
    allocate(Rij(natoms,natoms))
@@ -128,6 +142,14 @@ endif
          if (aij < -0.5)  aij = -0.5
          aij_mat(ii,jj) = aij
       enddo
+   enddo
+   allocate(Rinv(natoms,natoms), Aat_b(3,natoms))
+   Rinv = 0
+   do ii = 1,natoms
+      do jj = 1,natoms
+         if (ii .ne. jj) Rinv(ii,jj) = 1.0d0/Rij(ii,jj)
+      enddo
+      Aat_b(:,ii) = atoms(ii)%coor*ans2bohr
    enddo
    n_pairs = 0
    do ii = 1,natoms-1
@@ -156,6 +178,27 @@ endif
       enddo
       far_j_count(far_ii) = n_far - far_j_start(far_ii) + 1
    enddo
+   allocate(adj_start(natoms+1), adj_list(max(1, 2*n_pairs)))
+   adj_start = 0
+   do ip = 1,n_pairs
+      adj_start(pair_i(ip)) = adj_start(pair_i(ip)) + 1
+      adj_start(pair_j(ip)) = adj_start(pair_j(ip)) + 1
+   enddo
+   block
+      integer :: fill(natoms), nadj, cnt
+      nadj = 1
+      do far_ii = 1,natoms
+         cnt = adj_start(far_ii)
+         adj_start(far_ii) = nadj
+         nadj = nadj + cnt
+      enddo
+      adj_start(natoms+1) = nadj
+      fill = adj_start(1:natoms)
+      do ip = 1,n_pairs
+         adj_list(fill(pair_i(ip))) = pair_j(ip) ; fill(pair_i(ip)) = fill(pair_i(ip)) + 1
+         adj_list(fill(pair_j(ip))) = pair_i(ip) ; fill(pair_j(ip)) = fill(pair_j(ip)) + 1
+      enddo
+   end block
    allocate(far_j_list(n_far))
    n_far = 0
    do far_ii = 1,natoms
@@ -191,10 +234,12 @@ endif
       enddo
    enddo
 
+   becke_dev = .false.
+   if (becke_dev) allocate(pt_atom(totGrid))
    !$omp parallel &
    !$omp&   private(iatm,radpot,sphpot,nr_quarter,cursphpot,row,ratio,d_min) &
    !$omp&   private(parm,i,j,radx,radr,radw,Ntemp,potx,poty,potz,potw) &
-   !$omp&   private(label,ii,jj,ip,rdist,Pvec,rmiu,tmps,sij,far_jj)
+   !$omp&   private(label,ii,jj,ip,rdist,Pvec,rmiu,tmps,sij,far_jj,bfrac)
    allocate(potx(1202),poty(1202),potz(1202),potw(1202))
    allocate(Pvec(natoms))
    allocate(rdist(natoms))
@@ -256,9 +301,22 @@ endif
             Grids(label)%coor(1)=radr*potx(j) + atoms(iatm)%coor(1)*ans2bohr
             Grids(label)%coor(2)=radr*poty(j) + atoms(iatm)%coor(2)*ans2bohr
             Grids(label)%coor(3)=radr*potz(j) + atoms(iatm)%coor(3)*ans2bohr
+            if (becke_dev) then
+               Grids(label)%weight = radw*potw(j)
+               pt_atom(label) = iatm
+               label = 1 + label
+               cycle
+            endif
             do ii = 1,natoms
                rdist(ii) = dsqrt(sum((Grids(label)%coor - atoms(ii)%coor*ans2bohr)**2))
             enddo
+            if (.not. becke_pairs) then
+               call becke_point_fraction(natoms, rdist, Rij, Rinv, aij_mat, iatm, adj_start, adj_list, far_j_start, &
+                                         far_j_count, far_j_list, PAIR_CUTOFF, bfrac)
+               Grids(label)%weight = radw*potw(j)*bfrac
+               label = 1 + label
+               cycle
+            endif
             Pvec = 1.0D0
             do ip = 1,n_pairs
                ii = pair_i(ip)
@@ -295,15 +353,218 @@ endif
    deallocate(Pvec)
    deallocate(rdist)
    !$omp end parallel
+   tgb0 = omp_get_wtime()
+   tgb1 = tgb0
+   tgb2 = tgb0
+   if (becke_dev) then
+      block
+         logical :: gok
+         real(8),allocatable :: xyz(:,:), wv(:), Aat(:,:)
+         integer,allocatable :: pa(:), pi0(:), pj0(:), fs0(:), fl0(:)
+         integer :: k
+         allocate(xyz(3,totGrid), wv(totGrid), pa(totGrid), Aat(3,natoms))
+         allocate(pi0(max(1,n_pairs)), pj0(max(1,n_pairs)), fs0(natoms), fl0(max(1,size(far_j_list))))
+         !$omp parallel do
+         do k = 1,totGrid
+            xyz(:,k) = Grids(k)%coor
+            wv(k) = Grids(k)%weight
+            pa(k) = pt_atom(k) - 1
+         enddo
+         !$omp end parallel do
+         do k = 1,natoms
+            Aat(:,k) = atoms(k)%coor*ans2bohr
+         enddo
+         if (n_pairs .gt. 0) then
+            pi0(1:n_pairs) = pair_i - 1 ; pj0(1:n_pairs) = pair_j - 1
+         endif
+         fs0 = far_j_start - 1
+         if (size(far_j_list) .gt. 0) fl0(1:size(far_j_list)) = far_j_list - 1
+         gok = .false.
+         tgb1 = omp_get_wtime()
+         tgb2 = omp_get_wtime()
+         if (gok) then
+            !$omp parallel do
+            do k = 1,totGrid
+               Grids(k)%weight = wv(k)
+            enddo
+            !$omp end parallel do
+         else
+            !$omp parallel private(k, ii, jj, ip, rdist, Pvec, rmiu, tmps, sij, far_jj, iatm, bfrac)
+            allocate(Pvec(natoms), rdist(natoms))
+            !$omp do schedule(static)
+            do k = 1,totGrid
+               iatm = pt_atom(k)
+               do ii = 1,natoms
+                  rdist(ii) = dsqrt(sum((Grids(k)%coor - atoms(ii)%coor*ans2bohr)**2))
+               enddo
+               if (.not. becke_pairs) then
+                  call becke_point_fraction(natoms, rdist, Rij, Rinv, aij_mat, iatm, adj_start, adj_list, far_j_start, &
+                                            far_j_count, far_j_list, PAIR_CUTOFF, bfrac)
+                  Grids(k)%weight = Grids(k)%weight*bfrac
+                  cycle
+               endif
+               Pvec = 1.0D0
+               do ip = 1,n_pairs
+                  ii = pair_i(ip)
+                  jj = pair_j(ip)
+                  rmiu = (rdist(ii)-rdist(jj))/Rij(ii,jj)
+                  rmiu = rmiu + aij_mat(ii,jj)*(1-rmiu**2)
+                  tmps = 1.5D0 *(rmiu) - 0.5D0*(rmiu)**3
+                  tmps = 1.5D0 *(tmps) - 0.5D0*(tmps)**3
+                  tmps = 1.5D0 *(tmps) - 0.5D0*(tmps)**3
+                  sij = 0.5D0 * (1-tmps)
+                  Pvec(ii) = Pvec(ii) * sij
+                  Pvec(jj) = Pvec(jj) * (1.0D0 - sij)
+               enddo
+               do ip = far_j_start(iatm),far_j_start(iatm)+far_j_count(iatm)-1
+                  far_jj = far_j_list(ip)
+                  rmiu = (rdist(iatm)-rdist(far_jj))/Rij(iatm,far_jj)
+                  rmiu = rmiu + aij_mat(iatm,far_jj)*(1-rmiu**2)
+                  tmps = 1.5D0 *(rmiu) - 0.5D0*(rmiu)**3
+                  tmps = 1.5D0 *(tmps) - 0.5D0*(tmps)**3
+                  tmps = 1.5D0 *(tmps) - 0.5D0*(tmps)**3
+                  sij = 0.5D0 * (1-tmps)
+                  Pvec(iatm) = Pvec(iatm) * sij
+                  Pvec(far_jj) = Pvec(far_jj) * (1.0D0 - sij)
+               enddo
+               Grids(k)%weight = Grids(k)%weight*Pvec(iatm)/sum(Pvec)
+            enddo
+            !$omp end do
+            deallocate(Pvec, rdist)
+            !$omp end parallel
+         endif
+         deallocate(xyz, wv, pa, Aat, pi0, pj0, fs0, fl0)
+      end block
+      deallocate(pt_atom)
+   endif
    deallocate(grdRec)
    deallocate(atom_offset)
    deallocate(Rij)
    deallocate(aij_mat)
+   deallocate(Rinv, Aat_b, adj_start, adj_list)
    deallocate(pair_i,pair_j)
    deallocate(far_j_list,far_j_start,far_j_count)
+   tg2 = omp_get_wtime()
+   if (engine_verbose .ge. 2 .and. becke_dev) print '(A,3F8.2)', &
+      '  grid, device Becke (s): points / weights / rest', tgb0 - tg1, tgb2 - tgb1, tg2 - tgb2
 
    call spatial_sort_grid(totGrid)
+   tg3 = omp_get_wtime()
+   if (engine_verbose .ge. 2) print '(A,I9,A,I7,A,3F8.2)', '  grid: points', totGrid, '  atom pairs', n_pairs, &
+      '  count / points+Becke / sort (s)', tg1 - tg0, tg2 - tg1, tg3 - tg2
 end subroutine
+
+subroutine becke_point_fraction(natoms, rd, Rij, Rinv, aij, iown, adj_start, adj_list, far_start, far_count, far_list, pcut, frac)
+implicit none
+integer,intent(in) :: natoms, iown
+real(8),intent(in) :: rd(natoms), Rij(natoms,natoms), Rinv(natoms,natoms), aij(natoms,natoms), pcut
+integer,intent(in) :: adj_start(natoms+1), adj_list(*), far_start(natoms), far_count(natoms), far_list(*)
+real(8),intent(out) :: frac
+real(8),parameter :: BECKE_MU_CUT = 0.995d0
+integer :: k, n, ia
+real(8) :: mu, pk, ptot, pown, rdk
+logical :: dead
+
+n = minloc(rd, 1)
+ptot = 0.0d0
+pown = 0.0d0
+do k = 1, natoms
+   rdk = rd(k)
+   if (k .ne. n) then
+      if (Rij(k,n) .lt. pcut .or. k .eq. iown .or. n .eq. iown) then
+         mu = (rdk - rd(n))*Rinv(k,n)
+         mu = mu + aij(k,n)*(1.0d0 - mu*mu)
+         if (mu .ge. BECKE_MU_CUT) cycle
+      endif
+   endif
+   pk = 1.0d0
+   dead = .false.
+   do ia = adj_start(k), adj_start(k+1) - 1
+      call cell(adj_list(ia))
+      if (dead) exit
+   enddo
+   if (.not. dead) then
+      if (k .eq. iown) then
+         do ia = far_start(k), far_start(k) + far_count(k) - 1
+            call cell(far_list(ia))
+            if (dead) exit
+         enddo
+      else if (Rij(k,iown) .ge. pcut) then
+         call cell(iown)
+      endif
+   endif
+   if (dead) pk = 0.0d0
+   ptot = ptot + pk
+   if (k .eq. iown) pown = pk
+enddo
+frac = pown/ptot
+
+contains
+
+   subroutine cell(j)
+   integer,intent(in) :: j
+   real(8) :: m, t
+   m = (rdk - rd(j))*Rinv(k,j)
+   m = m + aij(k,j)*(1.0d0 - m*m)
+   if (m .le. -BECKE_MU_CUT) return
+   if (m .ge. BECKE_MU_CUT) then
+      dead = .true.
+      return
+   endif
+   t = 1.5d0*m - 0.5d0*m*m*m
+   t = 1.5d0*t - 0.5d0*t*t*t
+   t = 1.5d0*t - 0.5d0*t*t*t
+   pk = pk*0.5d0*(1.0d0 - t)
+   end subroutine cell
+end subroutine becke_point_fraction
+
+subroutine becke_partition_all_pairs(natoms, npts, coor, atom_of, w, acoor, Rij, aij_mat)
+use omp_lib, only: omp_get_wtime
+implicit none
+integer,intent(in) :: natoms, npts, atom_of(npts)
+real(8),intent(in) :: coor(3,npts), acoor(3,natoms), Rij(natoms,natoms), aij_mat(natoms,natoms)
+real(8),intent(inout) :: w(npts)
+real(8),allocatable :: Rinv(:,:), wv(:), rdist(:)
+integer,allocatable :: pi0(:), pj0(:), pa0(:), fs0(:), fc0(:), fl0(:)
+integer,allocatable :: adj_start(:), adj_list(:), far_start(:), far_count(:), far_list(:)
+integer :: ii, jj, kk, npr, k_adj
+real(8) :: bfrac
+logical :: gok
+
+gok = .false.
+if (gok) return
+allocate(Rinv(natoms,natoms), adj_start(natoms+1), adj_list(max(1, natoms*(natoms-1))), far_start(natoms), far_count(natoms), &
+         far_list(1))
+Rinv = 0.0d0
+do ii = 1,natoms
+   adj_start(ii) = 1 + (ii-1)*(natoms-1)
+   k_adj = adj_start(ii)
+   do jj = 1,natoms
+      if (jj .eq. ii) cycle
+      Rinv(ii,jj) = 1.0d0/Rij(ii,jj)
+      adj_list(k_adj) = jj
+      k_adj = k_adj + 1
+   enddo
+enddo
+adj_start(natoms+1) = 1 + natoms*(natoms-1)
+far_start = 1
+far_count = 0
+far_list = 0
+!$omp parallel private(rdist, ii, bfrac, kk)
+allocate(rdist(natoms))
+!$omp do schedule(dynamic, 256)
+do kk = 1,npts
+   do ii = 1,natoms
+      rdist(ii) = dsqrt(sum((coor(:,kk) - acoor(:,ii))**2))
+   enddo
+   call becke_point_fraction(natoms, rdist, Rij, Rinv, aij_mat, atom_of(kk), adj_start, adj_list, far_start, far_count, &
+                             far_list, 1.0d30, bfrac)
+   w(kk) = w(kk)*bfrac
+enddo
+!$omp end do
+deallocate(rdist)
+!$omp end parallel
+end subroutine becke_partition_all_pairs
 
 subroutine gridgen_nlc(nrad, nsph, npts, coor_out, weight_out, coor_in, per_atom_period_scale, intacc_eps)
 use MOL_info
@@ -325,6 +586,8 @@ real(8) :: acoor(3,natoms)
 real(8) :: parm, radx, radr, radw, chi, uij, aij
 real(8) :: potx(1202),poty(1202),potz(1202),potw(1202)
 real(8) :: rdist(natoms), Pvec(natoms), rmiu, tmps, sij
+logical :: nlc_pairs
+character(len=8) :: nlc_env
 integer :: iatm, i, j, Ntemp, ii, jj, ip, label
 integer :: nr_quarter, cursphpot, atom_pts
 
@@ -340,6 +603,9 @@ else
    enddo
 endif
 
+nlc_pairs = .false.
+call get_environment_variable("ENGINE_XC_BECKE_PAIRS", nlc_env)
+if (len_trim(nlc_env) > 0 .and. trim(nlc_env) /= '0') nlc_pairs = .true.
 use_per_atom = present(per_atom_period_scale)
 if (use_per_atom) use_per_atom = per_atom_period_scale
 use_intacc = present(intacc_eps)
@@ -429,6 +695,10 @@ do iatm = 1,natoms
          coor_out(2,label) = radr*poty(j) + acoor(2,iatm)
          coor_out(3,label) = radr*potz(j) + acoor(3,iatm)
          gridgen_nlc_atom_of(label) = iatm
+         if (.not. nlc_pairs) then
+            weight_out(label) = radw*potw(j)
+            cycle
+         endif
          do ii = 1,natoms
             rdist(ii) = dsqrt(sum((coor_out(:,label) - acoor(:,ii))**2))
          enddo
@@ -450,6 +720,7 @@ do iatm = 1,natoms
    enddo
 enddo
 !$omp end parallel do
+if (.not. nlc_pairs) call becke_partition_all_pairs(natoms, npts, coor_out, gridgen_nlc_atom_of, weight_out, acoor, Rij, aij_mat)
 
 contains
 

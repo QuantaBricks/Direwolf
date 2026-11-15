@@ -19,6 +19,7 @@ endif
 # for a prebuilt binary handed to someone else's machine.
 MARCH      ?= native
 
+
 FORT90     = gfortran
 CC         = gcc
 DATADIR    = data
@@ -49,22 +50,27 @@ LIBXCDIR   = third_party/libxc
 tagCOMP    = -c -free -O3 -fopenmp -I$(DATADIR) -I$(LIBXCDIR)/build -J$(BUILDDIR)
 tagCOMPF77 = -c -O3 -fopenmp -I$(DATADIR) -J$(BUILDDIR)
 
-VPATH = src/main:src/harness:src/harness/opt:src/harness/irc:src/harness/io:src/harness/io/namelist:src/harness/io/xyz:src/harness/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/response:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
+VPATH = src/main:src/harness:src/harness/opt:src/harness/irc:src/harness/io:src/harness/io/namelist:src/harness/io/xyz:src/harness/io/column:src/core:src/integrals:src/integrals/core:src/integrals/exact:src/integrals/df:src/integrals/cosx:src/integrals/force:src/integrals/hessian:src/localization:src/xc:src/dispersion:src/scf:src/response:src/tddft:src/nmr:src/force:src/guess:src/util:src/solvent:src/solvent/cavity:src/solvent/smd:src/solvent/cosmo_impl:examples
 
 objects = $(BUILDDIR)/mod_xcgrid_defaults.o \
           $(BUILDDIR)/mod_data.o \
           $(BUILDDIR)/mod_profile.o \
           $(BUILDDIR)/mod_output_format.o \
+          $(BUILDDIR)/mod_engine_report.o \
+          $(BUILDDIR)/mod_json_out.o \
+          $(BUILDDIR)/mod_engine_options.o \
           $(BUILDDIR)/mod_fixq.o \
           $(BUILDDIR)/mod_scf_history.o \
           $(BUILDDIR)/mod_meminfo.o \
           $(BUILDDIR)/mod_mem_predict.o \
           $(BUILDDIR)/exe_path_shim.o \
+          $(BUILDDIR)/mdj.o \
           $(BUILDDIR)/mod_basis_files.o \
           $(BUILDDIR)/mod_integrals.o \
           $(BUILDDIR)/mod_integrals_core.o \
           $(BUILDDIR)/mod_integrals_atomic_guess.o \
           $(BUILDDIR)/mod_integrals_puream.o \
+          $(BUILDDIR)/mod_integrals_giao.o \
           $(BUILDDIR)/properties.o \
           $(BUILDDIR)/resp.o \
           $(BUILDDIR)/mod_integrals_coulomb.o \
@@ -122,9 +128,11 @@ objects = $(BUILDDIR)/mod_xcgrid_defaults.o \
           $(BUILDDIR)/tool_io.o \
           $(BUILDDIR)/mod_checkpoint.o \
           $(BUILDDIR)/mod_molden.o \
+          $(BUILDDIR)/mod_cube.o \
           $(BUILDDIR)/guess.o \
           $(BUILDDIR)/SCF.o \
           $(BUILDDIR)/scf_adiis.o \
+          $(BUILDDIR)/mod_gemm_big.o \
           $(BUILDDIR)/scf_diis.o \
           $(BUILDDIR)/scf_soscf.o \
           $(BUILDDIR)/scf_fock.o \
@@ -132,6 +140,16 @@ objects = $(BUILDDIR)/mod_xcgrid_defaults.o \
           $(BUILDDIR)/hessian_freq.o \
           $(BUILDDIR)/cpscf.o \
           $(BUILDDIR)/cpscf_hessian.o \
+          $(BUILDDIR)/cpscf_uhf.o \
+          $(BUILDDIR)/cpscf_rhf.o \
+          $(BUILDDIR)/cpscf_polar.o \
+          $(BUILDDIR)/cpscf_apb.o \
+          $(BUILDDIR)/mod_tddft.o \
+          $(BUILDDIR)/mod_tddft_density.o \
+          $(BUILDDIR)/mod_tddft_nto.o \
+          $(BUILDDIR)/mod_nmr.o \
+          $(BUILDDIR)/mod_jcoupling.o \
+          $(BUILDDIR)/mod_nics.o \
           $(BUILDDIR)/cpscf_debug.o \
           $(BUILDDIR)/tool_mat.o \
           $(BUILDDIR)/grid_gen.o \
@@ -152,6 +170,7 @@ objects = $(BUILDDIR)/mod_xcgrid_defaults.o \
 # (EngineUp itself, called directly e.g. via iso_c_binding from
 # Python), which never touches a file on disk, so it has no business
 # depending on a file-format parser. See mod_engine_input.f90's header.
+
 io_objects = $(BUILDDIR)/mod_engine_input_types.o \
              $(BUILDDIR)/mod_engine_input_elements.o \
              $(BUILDDIR)/mod_engine_input_block.o \
@@ -166,15 +185,19 @@ io_objects = $(BUILDDIR)/mod_engine_input_types.o \
              $(BUILDDIR)/mod_internal_coords.o \
              $(BUILDDIR)/mod_opt_ts.o \
              $(BUILDDIR)/mod_opt_min.o \
+             $(BUILDDIR)/mod_opt_fragment.o \
+             $(BUILDDIR)/mod_opt_embed.o \
              $(BUILDDIR)/mod_opt_hessian.o \
              $(BUILDDIR)/mod_opt_constraints.o \
              $(BUILDDIR)/mod_opt_diis.o \
              $(BUILDDIR)/mod_geomopt.o \
+             $(BUILDDIR)/mod_opt_scan.o \
              $(BUILDDIR)/mod_irc.o \
              $(BUILDDIR)/mod_citations.o
 
 
 all: Direwolf
+
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
@@ -262,7 +285,8 @@ $(LIBCINTDIR)/build/libcint.a:
 # The two stages run one after the other: re_lapack needs files the first stage generates, and in a single
 # parallel invocation it can start before they exist.
 OPENBLAS_TARGET ?=
-OPENBLAS_NO_RELAPACK ?=
+# a fresh git checkout lacks relapack/config.h (OpenBLAS's .gitignore): then ReLAPACK is left out by default instead of failing
+OPENBLAS_NO_RELAPACK ?= $(if $(wildcard $(OPENBLASDIR)/relapack/config.h),,1)
 OPENBLAS_OPTS = USE_THREAD=1 USE_OPENMP=0 NO_SHARED=1 $(if $(OPENBLAS_TARGET),TARGET=$(OPENBLAS_TARGET)) $(if $(OPENBLAS_NO_RELAPACK),NO_RELAPACK=1)
 $(OPENBLASDIR)/libopenblas.a:
 	$(MAKE) -C $(OPENBLASDIR) $(OPENBLAS_OPTS) -j$(NPROC) libs
@@ -273,8 +297,9 @@ $(OPENBLASDIR)/libopenblas.a:
 # executables + decompressing/diffing every .bz2 regression case under
 # third_party/libxc/testsuite/) - none of that is needed to produce
 # libxcf03.a/libxc.a, it just makes every from-scratch build slower.
+LIBXC_EXTRA =
 $(LIBXCDIR)/build/libxcf03.a:
-	cd $(LIBXCDIR) && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=0 -DENABLE_FORTRAN=ON -DENABLE_XHOST=OFF -DBUILD_TESTING=OFF && cmake --build build -j$(NPROC)
+	cd $(LIBXCDIR) && cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=0 -DENABLE_FORTRAN=ON -DENABLE_XHOST=OFF -DBUILD_TESTING=OFF $(LIBXC_EXTRA) && cmake --build build -j$(NPROC)
 
 # -DBUILD_TESTING=OFF: toml-f's CMakeLists (via `include(CTest)`) tries
 # to FetchContent the test-drive framework from GitHub when its own
@@ -322,6 +347,11 @@ $(BUILDDIR)/nr_ecp_deriv.o: $(LIBCINTECPDIR)/nr_ecp_deriv.c $(LIBCINTDIR)/build/
 $(BUILDDIR)/ecp2f.o: $(LIBCINTECPDIR)/ecp2f.c $(LIBCINTDIR)/build/libcint.a | $(BUILDDIR)
 	$(CC) $(tagCOMPC) $< -o $@
 
+# mdj.c: Hermite-form RI-J three-centre kernel (Split-RI-J arrangement)
+$(BUILDDIR)/mdj.o: src/integrals/df/mdj.c $(LIBCINTDIR)/build/libcint.a | $(BUILDDIR)
+	$(CC) -c -O3 -march=$(MARCH) -fopenmp $< -o $@
+
+
 # exe_path_shim.c: readlink("/proc/self/exe",...) wrapper, called from
 # mod_basis_files.f90 so data/bases/ resolves relative to the running
 # binary's own location, not the caller's cwd - see that file's header.
@@ -335,7 +365,7 @@ $(LIBDIR)/libcint_ecp.a: $(BUILDDIR)/nr_ecp.o $(BUILDDIR)/nr_ecp_deriv.o $(BUILD
 	ar rcs $@ $^
 
 # module-dependency ordering (explicit prereqs so .mod files exist before use)
-$(BUILDDIR)/mod_profile.o   : $(BUILDDIR)/mod_meminfo.o
+$(BUILDDIR)/mod_profile.o   : $(BUILDDIR)/mod_meminfo.o $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/mod_scf_history.o : $(BUILDDIR)/mod_meminfo.o
 $(BUILDDIR)/mod_integrals.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_meminfo.o $(BUILDDIR)/mod_profile.o
 # mod_integrals.f90 declares the mod_integrals module's public interface
@@ -378,7 +408,10 @@ $(BUILDDIR)/mod_integrals.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_meminfo.o $
 $(BUILDDIR)/mod_integrals_core.o     : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_meminfo.o $(BUILDDIR)/mod_mem_predict.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_basis_files.o
 $(BUILDDIR)/mod_integrals_atomic_guess.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/mod_integrals_puream.o : $(BUILDDIR)/mod_integrals.o
-$(BUILDDIR)/properties.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o
+$(BUILDDIR)/mod_integrals_giao.o : $(BUILDDIR)/mod_integrals.o
+$(BUILDDIR)/mod_json_out.o : $(BUILDDIR)/mod_engine_report.o
+$(BUILDDIR)/mod_engine_options.o : $(BUILDDIR)/mod_engine_report.o
+$(BUILDDIR)/properties.o : $(BUILDDIR)/mod_engine_report.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/resp.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_profile.o
 $(BUILDDIR)/mod_integrals_coulomb.o  : $(BUILDDIR)/mod_integrals.o
 $(BUILDDIR)/mod_integrals_exchange.o : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o
@@ -390,7 +423,7 @@ $(BUILDDIR)/mod_integrals_exchange_cosx_k.o     : $(BUILDDIR)/mod_integrals_exch
 $(BUILDDIR)/mod_integrals_exchange_cosx_resp.o  : $(BUILDDIR)/mod_integrals_exchange_cosx.o $(BUILDDIR)/mod_fixq.o
 $(BUILDDIR)/mod_integrals_exchange_cosx_lr.o    : $(BUILDDIR)/mod_integrals_exchange_cosx.o
 $(BUILDDIR)/mod_integrals_exchange_cosx_sr.o    : $(BUILDDIR)/mod_integrals_exchange_cosx.o
-$(BUILDDIR)/mod_integrals_exchange_cosx_force.o : $(BUILDDIR)/mod_integrals_exchange_cosx.o
+$(BUILDDIR)/mod_integrals_exchange_cosx_force.o : $(BUILDDIR)/mod_integrals_exchange_cosx.o $(BUILDDIR)/xc_hess.o
 $(BUILDDIR)/mod_integrals_exchange_cosx_hess.o  : $(BUILDDIR)/mod_integrals_exchange_cosx.o $(BUILDDIR)/mod_fixq.o
 $(BUILDDIR)/mod_integrals_exchange_cosx_hess_kernels.o : $(BUILDDIR)/mod_integrals_exchange_cosx_hess.o
 $(BUILDDIR)/mod_integrals_exchange_cosx_hess_setup.o : $(BUILDDIR)/mod_integrals_exchange_cosx_hess.o
@@ -400,9 +433,20 @@ $(BUILDDIR)/mod_integrals_force.o    : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/m
 $(BUILDDIR)/mod_integrals_hessian.o  : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/hessian_1e.o             : $(BUILDDIR)/mod_integrals.o
 $(BUILDDIR)/hessian_2e_df_j.o        : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_profile.o
-$(BUILDDIR)/hessian_freq.o           :
-$(BUILDDIR)/cpscf.o                  : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/hessian_freq.o $(BUILDDIR)/xc_hess.o $(BUILDDIR)/mod_cosmo_hessian.o
+$(BUILDDIR)/hessian_freq.o           : $(BUILDDIR)/mod_engine_report.o
+$(BUILDDIR)/cpscf.o                  : $(BUILDDIR)/mod_engine_report.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/hessian_freq.o $(BUILDDIR)/xc_hess.o $(BUILDDIR)/mod_cosmo_hessian.o
 $(BUILDDIR)/cpscf_hessian.o          : $(BUILDDIR)/cpscf.o
+$(BUILDDIR)/cpscf_uhf.o              : $(BUILDDIR)/cpscf.o
+$(BUILDDIR)/cpscf_rhf.o              : $(BUILDDIR)/cpscf.o
+$(BUILDDIR)/cpscf_polar.o            : $(BUILDDIR)/cpscf.o
+$(BUILDDIR)/cpscf_apb.o              : $(BUILDDIR)/cpscf.o
+$(BUILDDIR)/mod_tddft_density.o      : $(BUILDDIR)/mod_cube.o $(BUILDDIR)/mod_data.o
+$(BUILDDIR)/mod_nmr.o               : $(BUILDDIR)/mod_cosmo_state.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_xc.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_cube.o $(BUILDDIR)/mod_vv10.o
+$(BUILDDIR)/mod_jcoupling.o         : $(BUILDDIR)/cpscf.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_cube.o $(BUILDDIR)/mod_nmr.o
+$(BUILDDIR)/engine.o                : $(BUILDDIR)/mod_nmr.o $(BUILDDIR)/mod_jcoupling.o $(BUILDDIR)/mod_nics.o
+$(BUILDDIR)/mod_tddft_nto.o          : $(BUILDDIR)/mod_molden.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_cube.o
+$(BUILDDIR)/engine.o                : $(BUILDDIR)/mod_tddft_density.o $(BUILDDIR)/mod_tddft_nto.o
+$(BUILDDIR)/mod_tddft.o              : $(BUILDDIR)/cpscf.o $(BUILDDIR)/xc_hess.o $(BUILDDIR)/cpscf_apb.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o
 $(BUILDDIR)/cpscf_debug.o            : $(BUILDDIR)/cpscf.o
 $(BUILDDIR)/mod_integrals_df_setup.o        : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_mem_predict.o $(BUILDDIR)/mod_meminfo.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_basis_files.o
 $(BUILDDIR)/mod_integrals_df_coulomb.o      : $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_fixq.o
@@ -447,11 +491,13 @@ $(BUILDDIR)/mod_localization.o : $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/tool_io.o  : $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/mod_checkpoint.o : $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/mod_molden.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o
+$(BUILDDIR)/mod_cube.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/gto_eval.o
 $(BUILDDIR)/guess.o    : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o
 $(BUILDDIR)/SCF.o      : $(BUILDDIR)/mod_output_format.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_density_fitting.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_scf_history.o $(BUILDDIR)/mod_xc.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/scf_soscf.o
 $(BUILDDIR)/scf_soscf.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_xc.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/xc_hess.o $(BUILDDIR)/cosmo.o
 $(BUILDDIR)/scf_fock.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_density_fitting.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/cosmo.o $(BUILDDIR)/mod_vv10.o
-$(BUILDDIR)/solveKS.o  : $(BUILDDIR)/mod_data.o
+$(BUILDDIR)/solveKS.o  : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_gemm_big.o
+$(BUILDDIR)/scf_diis.o : $(BUILDDIR)/mod_gemm_big.o
 $(BUILDDIR)/grid_gen.o : $(BUILDDIR)/mod_data.o
 $(BUILDDIR)/grid_dynamic.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_profile.o
 $(BUILDDIR)/gto_eval.o : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_meminfo.o $(BUILDDIR)/mod_integrals.o
@@ -461,7 +507,7 @@ $(BUILDDIR)/DFT_shellpair.o: $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_xc.o
 $(BUILDDIR)/xc_hess.o  : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_xc.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_localization.o $(BUILDDIR)/mod_fixq.o
 $(BUILDDIR)/mod_xc.o  : $(BUILDDIR)/mod_vv10.o $(LIBXCDIR)/build/libxcf03.a
 $(BUILDDIR)/force.o    : $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/mod_xc.o $(BUILDDIR)/cosmo.o
-$(BUILDDIR)/engine.o   : $(BUILDDIR)/mod_output_format.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_xc.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_meminfo.o $(BUILDDIR)/mod_mem_predict.o $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_molden.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/cosmo.o $(BUILDDIR)/cpscf.o $(BUILDDIR)/mod_dispersion.o $(BUILDDIR)/mod_dispersion_d3.o $(BUILDDIR)/mod_dispersion_d4.o $(BUILDDIR)/mod_gcp.o $(BUILDDIR)/mod_smd_cds.o $(BUILDDIR)/mod_basis_files.o $(BUILDDIR)/xc_hess.o
+$(BUILDDIR)/engine.o   : $(BUILDDIR)/mod_engine_options.o $(BUILDDIR)/mod_tddft.o $(BUILDDIR)/mod_engine_report.o $(BUILDDIR)/mod_output_format.o $(BUILDDIR)/mod_data.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_xc.o $(BUILDDIR)/mod_exchange.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_meminfo.o $(BUILDDIR)/mod_mem_predict.o $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_molden.o $(BUILDDIR)/mod_cube.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/cosmo.o $(BUILDDIR)/cpscf.o $(BUILDDIR)/mod_dispersion.o $(BUILDDIR)/mod_dispersion_d3.o $(BUILDDIR)/mod_dispersion_d4.o $(BUILDDIR)/mod_gcp.o $(BUILDDIR)/mod_smd_cds.o $(BUILDDIR)/mod_basis_files.o $(BUILDDIR)/xc_hess.o
 
 # engine.f90 now contains only the library entry points (EngineUp,
 # reset_engine_state) - no "program" statement - so the library objects
@@ -488,10 +534,10 @@ $(BUILDDIR)/mod_engine_input.o: mod_engine_input.f90 $(BUILDDIR)/mod_engine_inpu
                                  $(BUILDDIR)/cosmo.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
-$(BUILDDIR)/run_engine.o: run_engine.f90 $(BUILDDIR)/mod_output_format.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_scf_history.o $(BUILDDIR)/mod_version.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/cosmo.o \
+$(BUILDDIR)/run_engine.o: run_engine.f90 $(BUILDDIR)/mod_json_out.o $(BUILDDIR)/mod_engine_results.o $(BUILDDIR)/mod_output_format.o $(BUILDDIR)/mod_integrals.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/mod_scf_history.o $(BUILDDIR)/mod_version.o $(BUILDDIR)/mod_vv10.o $(BUILDDIR)/cosmo.o \
                           $(BUILDDIR)/mod_engine_input.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engine_input_block.o \
                           $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_engineup_interface.o \
-                          $(BUILDDIR)/mod_engine_results.o $(BUILDDIR)/mod_geomopt.o $(BUILDDIR)/mod_irc.o $(BUILDDIR)/mod_citations.o | $(BUILDDIR)
+                          $(BUILDDIR)/mod_engine_results.o $(BUILDDIR)/mod_geomopt.o $(BUILDDIR)/mod_opt_scan.o $(BUILDDIR)/mod_irc.o $(BUILDDIR)/mod_citations.o | $(BUILDDIR)
 	# -ffpe-summary affects the main program unit only. Keep invalid/zero/
 	# overflow (real bugs); drop underflow+denormal - both fire routinely
 	# and harmlessly from exp() in integral/grid screening and DFT-grid
@@ -503,7 +549,7 @@ $(BUILDDIR)/run_engine.o: run_engine.f90 $(BUILDDIR)/mod_output_format.o $(BUILD
 # EngineUp - Cartesian RFO / trust-radius quasi-Newton seeded by the
 # Lindh model Hessian. See mod_geomopt.f90's header. Harness-only, same
 # reasoning as io_objects itself.
-$(BUILDDIR)/mod_engine_results.o: mod_engine_results.f90 $(BUILDDIR)/mod_scf_history.o $(BUILDDIR)/mod_vv10.o | $(BUILDDIR)
+$(BUILDDIR)/mod_engine_results.o: mod_engine_results.f90 $(BUILDDIR)/mod_json_out.o $(BUILDDIR)/mod_output_format.o $(BUILDDIR)/mod_engine_options.o $(BUILDDIR)/mod_citations.o $(BUILDDIR)/mod_engine_input_types.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 $(BUILDDIR)/mod_wilson_bvec.o: mod_wilson_bvec.f90 | $(BUILDDIR)
@@ -516,10 +562,13 @@ $(BUILDDIR)/mod_internal_coords.o: mod_internal_coords.f90 $(BUILDDIR)/mod_wilso
                           $(BUILDDIR)/mod_lindh_hessian.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
-$(BUILDDIR)/mod_opt_ts.o: mod_opt_ts.f90 | $(BUILDDIR)
+$(BUILDDIR)/mod_opt_ts.o: mod_opt_ts.f90 $(BUILDDIR)/mod_wilson_bvec.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 $(BUILDDIR)/mod_opt_min.o: mod_opt_min.f90 $(BUILDDIR)/mod_internal_coords.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+$(BUILDDIR)/mod_opt_fragment.o: mod_opt_fragment.f90 $(BUILDDIR)/mod_opt_min.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 $(BUILDDIR)/mod_opt_hessian.o: mod_opt_hessian.f90 $(BUILDDIR)/mod_opt_min.o $(BUILDDIR)/mod_lindh_hessian.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engineup_interface.o \
@@ -532,9 +581,15 @@ $(BUILDDIR)/mod_opt_constraints.o: mod_opt_constraints.f90 $(BUILDDIR)/mod_wilso
 $(BUILDDIR)/mod_opt_diis.o: mod_opt_diis.f90 | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
-$(BUILDDIR)/mod_geomopt.o: mod_geomopt.f90 $(BUILDDIR)/mod_opt_diis.o $(BUILDDIR)/mod_opt_constraints.o $(BUILDDIR)/mod_opt_ts.o $(BUILDDIR)/mod_opt_min.o $(BUILDDIR)/mod_opt_hessian.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engineup_interface.o \
+$(BUILDDIR)/mod_opt_embed.o: mod_opt_embed.f90 $(BUILDDIR)/mod_opt_fragment.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engineup_interface.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+$(BUILDDIR)/mod_geomopt.o: mod_geomopt.f90 $(BUILDDIR)/mod_opt_embed.o $(BUILDDIR)/mod_opt_fragment.o $(BUILDDIR)/mod_output_format.o $(BUILDDIR)/mod_json_out.o $(BUILDDIR)/mod_engine_results.o $(BUILDDIR)/mod_opt_diis.o $(BUILDDIR)/mod_opt_constraints.o $(BUILDDIR)/mod_opt_ts.o $(BUILDDIR)/mod_opt_min.o $(BUILDDIR)/mod_opt_hessian.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engineup_interface.o \
                           $(BUILDDIR)/mod_lindh_hessian.o $(BUILDDIR)/mod_internal_coords.o $(BUILDDIR)/mod_engine_results.o \
                           $(BUILDDIR)/mod_engine_input_elements.o $(BUILDDIR)/mod_checkpoint.o $(BUILDDIR)/mod_profile.o $(BUILDDIR)/hessian_freq.o $(BUILDDIR)/mod_integrals.o | $(BUILDDIR)
+	$(FORT90) $(tagCOMP) $< -o $@
+
+$(BUILDDIR)/mod_opt_scan.o: mod_opt_scan.f90 $(BUILDDIR)/mod_geomopt.o $(BUILDDIR)/mod_wilson_bvec.o $(BUILDDIR)/mod_engine_input_types.o $(BUILDDIR)/mod_engine_input_elements.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 # Literature of the methods used (output block + BibLaTeX file)
@@ -543,19 +598,19 @@ $(BUILDDIR)/mod_citations.o: mod_citations.f90 $(BUILDDIR)/mod_engine_input_type
 
 # Intrinsic reaction coordinate (src/harness/irc), parallel to the optimizer:
 # uses its Hessian and Bofill-update modules, nothing flows back.
-$(BUILDDIR)/mod_irc.o: mod_irc.f90 $(BUILDDIR)/mod_opt_hessian.o $(BUILDDIR)/mod_opt_ts.o $(BUILDDIR)/mod_engine_input_types.o \
+$(BUILDDIR)/mod_irc.o: mod_irc.f90 $(BUILDDIR)/mod_json_out.o $(BUILDDIR)/mod_opt_hessian.o $(BUILDDIR)/mod_opt_ts.o $(BUILDDIR)/mod_engine_input_types.o \
                           $(BUILDDIR)/mod_engineup_interface.o $(BUILDDIR)/mod_engine_input_elements.o $(BUILDDIR)/hessian_freq.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 # Interface-only module for EngineUp (see mod_engineup_interface.f90's
 # own header) - depends on nothing but sits in io_objects (harness-only,
 # same reasoning as the comment above io_objects' own definition).
-$(BUILDDIR)/mod_engineup_interface.o: mod_engineup_interface.f90 | $(BUILDDIR)
+$(BUILDDIR)/mod_engineup_interface.o: mod_engineup_interface.f90 $(BUILDDIR)/mod_engine_options.o | $(BUILDDIR)
 	$(FORT90) $(tagCOMP) $< -o $@
 
 
 Direwolf : $(BUILDDIR)/run_engine.o $(io_objects) $(BUILDDIR)/mod_version.o $(BUILDDIR)/libengine.a $(LIBDIR)/libcint_ecp.a $(LIBCINTDIR)/build/libcint.a $(OPENBLASDIR)/libopenblas.a $(LIBXCDIR)/build/libxcf03.a $(TOMLF_PREREQ)
-	$(FORT90) -o Direwolf -fbacktrace -fopenmp $(BUILDDIR)/run_engine.o $(io_objects) $(BUILDDIR)/mod_version.o $(BUILDDIR)/libengine.a $(LIBCINTDIR)/build/libcint.a $(LIBDIR)/libcint_ecp.a $(OPENBLASDIR)/libopenblas.a $(LIBXCDIR)/build/libxcf03.a $(LIBXCDIR)/build/libxc.a -lpthread -L$(DFTD3DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD3DIR)/build' -ls-dftd3 -L$(MCTCDIR)/build -lmctc-lib -L$(GCPDIR)/build -Wl,-rpath,'$$ORIGIN/$(GCPDIR)/build' -lgcp -L$(DFTD4DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD4DIR)/build' -ldftd4 -L$(THIRDPARTY_INSTALL)/lib -lmulticharge $(TOMLF_LINKFLAGS)
+	$(FORT90) -o Direwolf -fbacktrace -fopenmp $(BUILDDIR)/run_engine.o $(io_objects) $(BUILDDIR)/mod_version.o $(BUILDDIR)/libengine.a $(LIBCINTDIR)/build/libcint.a $(LIBDIR)/libcint_ecp.a $(OPENBLASDIR)/libopenblas.a $(LIBXCDIR)/build/libxcf03.a $(LIBXCDIR)/build/libxc.a -lpthread -L$(DFTD3DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD3DIR)/build' -ls-dftd3 -L$(MCTCDIR)/build -lmctc-lib -L$(GCPDIR)/build -Wl,-rpath,'$$ORIGIN/$(GCPDIR)/build' -lgcp -L$(DFTD4DIR)/build -Wl,-rpath,'$$ORIGIN/$(DFTD4DIR)/build' -ldftd4 -L$(THIRDPARTY_INSTALL)/lib -lmulticharge $(TOMLF_LINKFLAGS) $(EXTRA_LDLIBS)
 
 .PHONY : clean
 clean :

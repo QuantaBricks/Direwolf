@@ -15,6 +15,6 @@ H    0.0000   -0.7700   -0.4800
 &end
 
 &opt
- opt_hess = 'read'          ! read a Cartesian Hessian from a file (Gaussian readfc)
- opt_hessian_file = 'examples/optimization/water_gfn2.hessian'
+ hessian = 'read'          ! read a Cartesian Hessian from a file (Gaussian readfc)
+ hessian_file = 'examples/optimization/water_gfn2.hessian'
 &end

@@ -133,6 +133,7 @@ bvec = 0.0d0
 maxdiag = maxval(aux_shell_bound)
 allocate(dmax_shell(0:nBases-1,0:nBases-1))
 call compute_shell_density_bound(nConts_in, Ptot, dmax_shell)
+if (.not. allocated(df_triple_ish)) call build_df_triple_list()
 call prof_start("df_force_direct_bpass")
 !$omp parallel private(ish,jsh,ksh,di,dj,dk,offi,offj,offP,shls,p,q,r,val,t) &
 !$omp&   private(bvec_local)

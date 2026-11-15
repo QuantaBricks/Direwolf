@@ -7,6 +7,7 @@ module mod_cosmo_state
 implicit none
 
 logical :: cosmo_enabled = .false.
+logical :: cosmo_cpcm = .false.
 
 integer :: n_tess = 0
 real(8),allocatable :: tess_coor(:,:)
@@ -43,5 +44,19 @@ real(8),allocatable :: Vtot_last(:)
 logical :: cosmors_request = .false.
 character(256) :: cosmors_cosmo_file_req = ''
 character(64) :: cosmors_compound_name_req = ''
+
+contains
+
+function cosmo_min_tess_area_ang2() result(a)
+real(8) :: a
+integer :: ios
+character(len=32) :: e
+a = 1.0d-4
+call get_environment_variable("ENGINE_COSMO_MIN_AREA", e)
+if (len_trim(e) > 0) then
+   read(e, *, iostat=ios) a
+   if (ios /= 0 .or. a < 0.0d0) a = 1.0d-4
+endif
+end function cosmo_min_tess_area_ang2
 
 end module mod_cosmo_state

@@ -281,6 +281,13 @@ integer, parameter :: XCGRID_ZONE302_METAGGA_HIGH(5) = (/-1,-1,-1,-1,-1/)
 integer, parameter :: XCGRID_ZONE434_R2SCAN_LO(5) = (/14, 38, 110, 266, 110/)
 integer, parameter :: XCGRID_ZONE302_R2SCAN_LO(5) = (/14, 38, 110, 194, 110/)
 
+! 2026-10-14 (not changed): REGULAR against an L7 grid on paracetamol/def2-SVP is 5.3e-5 Ha (2.6e-6/atom) with
+! max|dF| 1.75e-4 Ha/bohr. Cutting points made one of the two worse each time: heavy-atom peak 350->266 and flanks
+! 146->110: energy 4.8e-5 but max|dF| 2.2e-4 (+24 %); radial scales -15 %: energy 1.7e-4 (x3.3); both: 1.7e-4 and
+! 2.0e-4. HIGH: 2.1e-6 and 1.2e-4. For open-shell references no cell cheaper than HIGH keeps the frontier orbital
+! energies of OH/CH2/NH2/NO within 4e-5 (HIGH zones with REGULAR radial scales: CH2 7.5e-5, -20 % points; with a
+! 350 peak: CH2 1.7e-4), so open-shell r2SCAN of up to 4 atoms stays on HIGH (xcgrid_theory_apply); from 5 atoms
+! REGULAR with the zone raise is enough (caffeine cation 2.3e-5 against HIGH 1.8e-5 at half the points).
 ! R2SCAN / REGULAR - VALIDATED 2026-09-13. zone434 = (14,38,110,350,146),
 ! H/He peak = 194. Same near-core/flanks as SMOOTHDFT/REGULAR; the heavy-
 ! atom peak is 350. R2SCAN's radial dominance means this angular scheme

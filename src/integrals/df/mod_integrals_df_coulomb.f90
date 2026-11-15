@@ -4,7 +4,67 @@
 ! Density-fitting (RI-J) Coulomb matrix build.
 
 submodule (mod_integrals) df_coulomb_impl
+use iso_c_binding, only: c_int, c_long, c_double
 implicit none
+real(8),allocatable :: dfj_cmp_J(:,:), dfj_cmp_b(:)
+integer(8) :: mdj_ghs = -1
+integer :: mdj_npair = -1
+integer,allocatable :: mdj_pish(:), mdj_pjsh(:)
+interface
+   function mdj_init(atm_, bas_, nbas_, norb_, env_, pure_) bind(C, name='mdj_init')
+      import :: c_int, c_long, c_double
+      integer(c_int) :: atm_(*), bas_(*), nbas_, norb_, pure_
+      real(c_double) :: env_(*)
+      integer(c_long) :: mdj_init
+   end function
+   subroutine mdj_bfinal(G_, b_) bind(C, name='mdj_bfinal')
+      import :: c_double
+      real(c_double) :: G_(*), b_(*)
+   end subroutine
+   subroutine mdj_jprep(c_, H_) bind(C, name='mdj_jprep')
+      import :: c_double
+      real(c_double) :: c_(*), H_(*)
+   end subroutine
+   subroutine mdj_grad_pair(ish_, jsh_, D_, H_, schw_, auxb_, cut0_, gA_, gB_, gC_) bind(C, name='mdj_grad_pair')
+      import :: c_int, c_double
+      integer(c_int) :: ish_, jsh_
+      real(c_double) :: D_(*), H_(*), schw_, auxb_(*), cut0_, gA_(3), gB_(3), gC_(*)
+   end subroutine
+   subroutine mdj_bpass_pair_g(ish_, jsh_, D_, schw_, auxb_, cut_, G_) bind(C, name='mdj_bpass_pair')
+      import :: c_int, c_double
+      integer(c_int) :: ish_, jsh_
+      real(c_double) :: D_(*), schw_, auxb_(*), cut_, G_(*)
+   end subroutine
+   subroutine mdj_b1_pair(ish_, jsh_, D_, schw_, auxb_, cut_, ldG_, G0_, GI_, GJ_, GK_) bind(C, name='mdj_b1_pair')
+      import :: c_int, c_long, c_double
+      integer(c_int) :: ish_, jsh_
+      integer(c_long) :: ldG_
+      real(c_double) :: D_(*), schw_, auxb_(*), cut_, G0_(*), GI_(*), GJ_(*), GK_(*)
+   end subroutine
+   subroutine mdj_hess_pair(ish_, jsh_, D_, H_, schw_, auxb_, cut_, nat_, aI_, aJ_, d2_) bind(C, name='mdj_hess_pair')
+      import :: c_int, c_double
+      integer(c_int) :: ish_, jsh_, nat_, aI_, aJ_
+      real(c_double) :: D_(*), H_(*), schw_, auxb_(*), cut_, d2_(*)
+   end subroutine
+   subroutine mdj_jx_pair(ish_, jsh_, H_, schw_, auxb_, cut_, nat_, SA_, SB_, nK_, Klist_, SK_) bind(C, name='mdj_jx_pair')
+      import :: c_int, c_double
+      integer(c_int) :: ish_, jsh_, nat_, nK_, Klist_(*)
+      real(c_double) :: H_(*), schw_, auxb_(*), cut_, SA_(*), SB_(*), SK_(*)
+   end subroutine
+   subroutine mdj_bpass_multi(ish_, jsh_, D_, ldD_, nb_, schw_, auxb_, cut_, G_, ldG_) bind(C, name='mdj_bpass_multi')
+      import :: c_int, c_long, c_double
+      integer(c_int) :: ish_, jsh_, ldD_, nb_
+      integer(c_long) :: ldG_
+      real(c_double) :: D_(*), schw_, auxb_(*), cut_, G_(*)
+   end subroutine
+   subroutine mdj_jpass_multi(ish_, jsh_, H_, ldH_, nb_, schw_, auxb_, cut0_, cb_, cut_, J_, ldJ_) &
+         bind(C, name='mdj_jpass_multi')
+      import :: c_int, c_long, c_double
+      integer(c_int) :: ish_, jsh_, nb_, ldJ_
+      integer(c_long) :: ldH_
+      real(c_double) :: H_(*), schw_, auxb_(*), cut0_, cb_(*), cut_, J_(*)
+   end subroutine
+end interface
 contains
 
 module subroutine integrals_build_coulomb_df(nConts_in, Ptot, J)
@@ -27,12 +87,20 @@ do_full = (.not. incr_fock_enabled) .or. (.not. incr_has_prev) &
           .or. (incr_since_full .ge. incr_full_period)
 
 if (do_full) then
-   call df_build_coulomb_core(nConts_in, Ptot, J)
+   block
+      logical :: ext_done
+      ext_done = .false.
+      if (.not. ext_done) call df_build_coulomb_core(nConts_in, Ptot, J)
+   end block
    incr_since_full = 0
 else
    allocate(dP(nConts_in,nConts_in), dJ(nConts_in,nConts_in))
    dP = Ptot - incr_Ptot_prev
-   call df_build_coulomb_core(nConts_in, dP, dJ, incremental_call=.true.)
+   block
+      logical :: ext_done
+      ext_done = .false.
+      if (.not. ext_done) call df_build_coulomb_core(nConts_in, dP, dJ, incremental_call=.true.)
+   end block
    J = incr_J_prev + dJ
    deallocate(dP, dJ)
    incr_since_full = incr_since_full + 1
@@ -50,6 +118,7 @@ end subroutine integrals_build_coulomb_df
 
 module subroutine integrals_build_coulomb_df_batch(nConts, nbatch, Ptot, J)
 use omp_lib, only: omp_get_max_threads
+use mod_profile, only: prof_start, prof_stop
 implicit none
 integer,intent(in) :: nConts, nbatch
 real(8),intent(in) :: Ptot(nConts,nConts,nbatch)
@@ -59,7 +128,9 @@ real(8),allocatable :: Ptot_compact(:,:), J_compact(:,:)
 real(8),allocatable :: Bvec(:,:), Tvec(:,:), Cvec(:,:)
 external :: dgemm
 
+call prof_start("df_setup")
 call ensure_df_built()
+call prof_stop("df_setup")
 
 if (df_direct_mode) then
    block
@@ -130,6 +201,7 @@ end subroutine integrals_build_coulomb_df_batch
 
 module subroutine df_build_coulomb_core(nConts_in, Ptot, J, incremental_call)
 use omp_lib, only: omp_get_max_threads
+use mod_profile, only: prof_start, prof_stop
 implicit none
 integer,intent(in) :: nConts_in
 real(8),intent(in) :: Ptot(nConts_in,nConts_in)
@@ -138,7 +210,9 @@ logical,intent(in),optional :: incremental_call
 real(8),allocatable :: bvec(:), tvec(:), cvec(:), bprime(:), Ptot_compact(:), J_compact(:)
 integer :: slot
 
+call prof_start("df_setup")
 call ensure_df_built()
+call prof_stop("df_setup")
 
 if (df_direct_mode) then
    call df_build_coulomb_direct(nConts_in, Ptot, J, incremental_call)
@@ -210,6 +284,8 @@ do ksh = nBases,nBases+nBasesAux-1
    t = t + df_shell_ncgto(ksh)
 enddo
 
+if (df_triple_defer) return
+
 allocate(count_per_ish(0:nBases-1))
 !$omp parallel do private(ish,jsh,ksh) schedule(dynamic)
 do ish = 0,nBases-1
@@ -264,6 +340,7 @@ end subroutine build_df_triple_list
 
 module subroutine integrals_build_coulomb_df_batch_c(nConts, nb, Lf, nop, Co, JC)
 use omp_lib, only: omp_get_max_threads
+use mod_profile, only: prof_start, prof_stop
 implicit none
 integer,intent(in) :: nConts, nb, nop
 real(8),intent(in) :: Lf(nConts,nop,nb), Co(nConts,nop)
@@ -274,12 +351,16 @@ integer :: m, s0, cnt, b, k, sl, sm, o, c0, nch
 real(8) :: t
 external :: dgemm
 
+call prof_start("df_setup")
 call ensure_df_built()
+call prof_stop("df_setup")
 if (df_direct_mode .and. .not. dfK_built) then
    block
       character(len=8) :: e
+      logical :: dense
       call get_environment_variable("ENGINE_DFJ_BATCHC_DENSE", e)
-      if (trim(e) .ne. "1") then
+      dense = (trim(e) .eq. "1")
+      if (.not. dense) then
          call df_build_coulomb_direct_batch_c(nConts, nb, Lf, nop, Co, JC)
          return
       endif
@@ -289,14 +370,18 @@ if (df_direct_mode .or. dfK_built) then
    allocate(Dch(nConts,nConts,16), Jch(nConts,nConts,16))
    do c0 = 0, nb-1, 16
       nch = min(16, nb-c0)
+      !$omp parallel do private(b) schedule(static)
       do b = 1,nch
          call dgemm('N','T',nConts,nConts,nop,1.0d0,Lf(1,1,c0+b),nConts,Co,nConts,0.0d0,Dch(1,1,b),nConts)
          Dch(:,:,b) = Dch(:,:,b) + transpose(Dch(:,:,b))
       enddo
+      !$omp end parallel do
       call integrals_build_coulomb_df_batch(nConts, nch, Dch(:,:,1:nch), Jch(:,:,1:nch))
+      !$omp parallel do private(b) schedule(static)
       do b = 1,nch
          call dgemm('N','N',nConts,nop,nConts,1.0d0,Jch(1,1,b),nConts,Co,nConts,0.0d0,JC(1,1,c0+b),nConts)
       enddo
+      !$omp end parallel do
    enddo
    deallocate(Dch, Jch)
    return
@@ -401,6 +486,7 @@ enddo
 call compute_shell_density_bound(nConts_in, Pmax, dmax_shell)
 deallocate(Pmax)
 
+if (.not. allocated(df_triple_ish)) call build_df_triple_list()
 allocate(cnt(0:nBases-1), iptr(0:nBases), ilist(df_n_triples))
 cnt = 0
 do t = 1,df_n_triples
@@ -495,8 +581,7 @@ end block
 deallocate(buf, bn, Dt, Bloc, bnP, Tb, poff, pdk)
 !$omp end parallel
 call prof_stop("df_direct_bpass")
-call get_environment_variable("ENGINE_DFJ_BATCH_VERBOSE", venv)
-if (trim(venv) .eq. "1") then
+if (engine_verbose .ge. 2) then
    print '(A,I0,A,I0,A,I0,A,F8.3,A,F9.3)', " DFJ batch nb=", nb, "  triples ", df_n_triples, " computed ", ncalls, &
          "  b-pass wall ", omp_get_wtime()-tall0, "  int thread-s ", tint
    call flush(6)
@@ -614,11 +699,30 @@ integer :: shls(4)
 real(8) :: maxdiag, fd, sd, v, tq(10), tq0, tqa, tqb
 character(len=8) :: venv
 external :: dgemm
+logical :: md
+integer(c_int) :: ishc, jshc, nbc, ldc
+real(8),allocatable :: Gm(:,:), Gloc(:,:), Hm(:,:), Dn(:,:), cNa(:)
+real(8) :: cut0
 
 tq = 0.0d0 ; tq0 = omp_get_wtime()
 maxdi = maxval(df_shell_ncgto(0:nBases-1))
 maxdk = maxval(df_shell_ncgto(nBases:nBases+nBasesAux-1))
 maxdiag = maxval(aux_shell_bound)
+md = (dfj_md_mode() == 1)
+if (md) then
+   block
+      character(len=8) :: nbe
+      integer :: nbmax_md, nbios
+      nbmax_md = 40
+      call get_environment_variable("ENGINE_DFJ_MD_NBMAX", nbe)
+      if (len_trim(nbe) > 0) then
+         read(nbe, *, iostat=nbios) nbmax_md
+      endif
+      if (nb > nbmax_md) md = .false.
+   end block
+endif
+cut0 = SCHWARZ_CUTOFF
+nbc = nb ; ldc = maxdi*maxdi
 allocate(LB(nop,nb,nConts_in), CoT(nop,nConts_in), JB(nop,nb,nConts_in))
 !$omp parallel do private(m,b)
 do m = 1,nConts_in
@@ -649,6 +753,7 @@ do jsh = 0,nBases-1
    enddo
 enddo
 
+if (.not. allocated(df_triple_ish)) call build_df_triple_list()
 allocate(cnt(0:nBases-1), iptr(0:nBases), ilist(df_n_triples))
 cnt = 0
 do t = 1,df_n_triples
@@ -675,10 +780,18 @@ call sort_desc(nBases, wrk, ord)
 call prof_start("df_direct_bpass")
 allocate(Bm(nContsAux,nb))
 Bm = 0.0d0
+if (md) then
+   allocate(Gm(mdj_ghs,nb))
+   Gm = 0.0d0
+endif
 !$omp parallel private(ii,ish,jsh,ksh,di,dj,dk,offi,offj,offP,shls,buf,Dt,Bloc,p,q,r,it,b,fd,sd,tqa,r0) &
-!$omp&  private(bnP,Tb,poff,pdk,np,ncol,it0,it1,s0)
+!$omp&  private(bnP,Tb,poff,pdk,np,ncol,it0,it1,s0,Gloc,Dn,ishc,jshc)
 allocate(buf(maxdi*maxdi*maxdk), Dt(maxdi*maxdi,nb), Bloc(nContsAux,nb))
 allocate(bnP(maxdi*maxdi,nContsAux), Tb(nContsAux,nb), poff(nBasesAux), pdk(nBasesAux))
+if (md) then
+   allocate(Gloc(mdj_ghs,nb), Dn(maxdi*maxdi,nb))
+   Gloc = 0.0d0
+endif
 Bloc = 0.0d0
 !$omp do schedule(static,1)
 do ii = 0,nBases-1
@@ -713,6 +826,21 @@ do ii = 0,nBases-1
       !$omp atomic
       tq(5) = tq(5) + (omp_get_wtime()-tqa)
       tqa = omp_get_wtime()
+      if (md) then
+         do b = 1,nb
+            do q = 1,dj
+               do p = 1,di
+                  Dn((q-1)*di+p,b) = Dt((q-1)*di+p,b)*NorVEC(offi+p)*NorVEC(offj+q)
+               enddo
+            enddo
+         enddo
+         ishc = ish ; jshc = jsh
+         call mdj_bpass_multi(ishc, jshc, Dn, ldc, nbc, schwarz_bound(ish,jsh), aux_shell_bound, cut0, Gloc, mdj_ghs)
+         !$omp atomic
+         tq(6) = tq(6) + (omp_get_wtime()-tqa)
+         it0 = it1 + 1
+         cycle
+      endif
       np = 0 ; ncol = 0
       do it = it0,it1
          ksh = df_triple_ksh(ilist(it))
@@ -750,11 +878,25 @@ block
    integer :: mt
    do mt = 0, omp_get_num_threads()-1
       !$omp barrier
-      if (omp_get_thread_num() .eq. mt) Bm = Bm + Bloc
+      if (omp_get_thread_num() .eq. mt) then
+         if (md) then
+            Gm = Gm + Gloc
+         else
+            Bm = Bm + Bloc
+         endif
+      endif
    enddo
 end block
 deallocate(buf, Dt, Bloc, bnP, Tb, poff, pdk)
+if (md) deallocate(Gloc, Dn)
 !$omp end parallel
+if (md) then
+   do b = 1,nb
+      call mdj_bfinal(Gm(1,b), Bm(1,b))
+      Bm(:,b) = Bm(:,b)*NorVECAux
+   enddo
+   deallocate(Gm)
+endif
 call prof_stop("df_direct_bpass")
 tq(2) = omp_get_wtime()-tq0 ; tq0 = omp_get_wtime()
 
@@ -780,8 +922,15 @@ allocate(slk(0:nBases-1))
 do ish = 0,nBases-1
    call omp_init_lock(slk(ish))
 enddo
+if (md) then
+   allocate(Hm(mdj_ghs,nb), cNa(nContsAux))
+   do b = 1,nb
+      cNa = Cm(:,b)*NorVECAux
+      call mdj_jprep(cNa, Hm(1,b))
+   enddo
+endif
 !$omp parallel private(ish,jsh,ksh,di,dj,dk,offi,offj,offP,shls,buf,Jt,p,q,r,it,b,v) &
-!$omp&  private(bnP,Cg,ncol,it0,it1,Wi,Wj,tqb)
+!$omp&  private(bnP,Cg,ncol,it0,it1,Wi,Wj,tqb,ishc,jshc)
 allocate(buf(maxdi*maxdi*maxdk), Jt(maxdi*maxdi,nb))
 allocate(bnP(maxdi*maxdi,nContsAux), Cg(nContsAux,nb), Wi(nop,nb,maxdi), Wj(nop,nb,maxdi))
 !$omp do schedule(dynamic)
@@ -799,7 +948,22 @@ do ish = 0,nBases-1
       dj = df_shell_ncgto(jsh); offj = df_shell_offset(jsh)
       tqb = omp_get_wtime()
       ncol = 0
+      if (md) then
+         ishc = ish ; jshc = jsh
+         call mdj_jpass_multi(ishc, jshc, Hm, mdj_ghs, nbc, schwarz_bound(ish,jsh), aux_shell_bound, cut0, &
+                              cbound, density_screen_cutoff, Jt, ldc)
+         do b = 1,nb
+            do q = 1,dj
+               do p = 1,di
+                  Jt((q-1)*di+p,b) = Jt((q-1)*di+p,b)*NorVEC(offi+p)*NorVEC(offj+q)
+               enddo
+            enddo
+         enddo
+         ncol = -1
+         it = it1 + 1
+      endif
       do it = it0,it1
+         if (md) exit
          ksh = df_triple_ksh(ilist(it))
          if (schwarz_bound(ish,jsh)*cbound(ksh-nBases+1) .lt. density_screen_cutoff) cycle
          dk = df_shell_ncgto(ksh); offP = df_shell_offset(ksh)
@@ -820,8 +984,8 @@ do ish = 0,nBases-1
       !$omp atomic
       tq(7) = tq(7) + (omp_get_wtime()-tqb)
       tqb = omp_get_wtime()
-      if (ncol .gt. 0) then
-         call dgemm('N','N',di*dj,nb,ncol,1.0d0,bnP,maxdi*maxdi,Cg,nContsAux,0.0d0,Jt,maxdi*maxdi)
+      if (ncol .ne. 0) then
+         if (ncol .gt. 0) call dgemm('N','N',di*dj,nb,ncol,1.0d0,bnP,maxdi*maxdi,Cg,nContsAux,0.0d0,Jt,maxdi*maxdi)
          !$omp atomic
          tq(8) = tq(8) + (omp_get_wtime()-tqb)
          tqb = omp_get_wtime()
@@ -878,12 +1042,12 @@ enddo
 !$omp end parallel do
 call prof_stop("df_direct_jpass")
 tq(4) = omp_get_wtime()-tq0
-call get_environment_variable("ENGINE_DFJ_BATCH_VERBOSE", venv)
-if (trim(venv) .eq. "1") print '(A,I0,A,4F8.3,A,2F9.2)', " DFJC direct nb=", nb, "  setup/b-pass/solve/j-pass ", tq(1:4), &
+if (engine_verbose .ge. 2) print '(A,I0,A,4F8.3,A,2F9.2)', " DFJC direct nb=", nb, "  setup/b-pass/solve/j-pass ", tq(1:4), &
    "  thread-s Dt / int+dgemm ", tq(5), tq(6)
-if (trim(venv) .eq. "1") print '(A,4F9.2)', "   j-pass thread-s int / dgemm / W loops / lock+add ", tq(7:10)
-if (trim(venv) .eq. "1") call flush(6)
+if (engine_verbose .ge. 2) print '(A,4F9.2)', "   j-pass thread-s int / dgemm / W loops / lock+add ", tq(7:10)
+if (engine_verbose .ge. 2) call flush(6)
 deallocate(ord, wrk)
+if (md) deallocate(Hm, cNa)
 deallocate(LB, CoT, JB, Lnrm, Cnrm, smax, Bm, Tm, Cm, cbound, cnt, iptr, ilist, slk)
 contains
 subroutine sort_desc(n, w, idx)
@@ -943,6 +1107,20 @@ maxdi = maxval(df_shell_ncgto(0:nBases-1))
 maxdj = maxdi
 maxdk = maxval(df_shell_ncgto(nBases:nBases+nBasesAux-1))
 
+if (dfj_md_mode() > 0) then
+   block
+      real(8),allocatable :: Jm(:,:), bm(:)
+      if (dfj_md_mode() == 1) then
+         call df_coulomb_direct_md(nConts_in, Ptot, J, this_cutoff, dmax_shell, maxdiag)
+         deallocate(bvec, tvec, cvec, dmax_shell)
+         return
+      endif
+      allocate(Jm(nConts_in,nConts_in))
+      call df_coulomb_direct_md(nConts_in, Ptot, Jm, this_cutoff, dmax_shell, maxdiag, bm)
+      dfj_cmp_J = Jm ; dfj_cmp_b = bm
+   end block
+endif
+if (.not. allocated(df_triple_ish)) call build_df_triple_list()
 call prof_start("df_direct_bpass")
 !$omp parallel private(ish,jsh,ksh,di,dj,dk,offi,offj,offP,shls,buf3c_flat,p,q,r,val,t) &
 !$omp&   private(tid)
@@ -1052,8 +1230,483 @@ end block
 !$omp end parallel
 call prof_stop("df_direct_jpass")
 
+if (dfj_md_mode() == 2) then
+   print '(A,2ES12.3,A,2ES12.3)', '[dfj md] max|db|, max|b| ', maxval(abs(dfj_cmp_b - bvec)), maxval(abs(bvec)), &
+         '  max|dJ|, max|J| ', maxval(abs(dfj_cmp_J - J)), maxval(abs(J))
+   deallocate(dfj_cmp_J, dfj_cmp_b)
+endif
 deallocate(bvec,tvec,cvec)
 deallocate(dmax_shell,cvec_shell_bound)
 end subroutine df_build_coulomb_direct
+
+integer function dfj_md_mode()
+use iso_c_binding, only: c_int
+integer, save :: mode = -1
+character(len=8) :: e
+integer(c_int) :: nb_all, norb_c, pure_c
+if (mode < 0) then
+   call get_environment_variable("ENGINE_DFJ_MD", e)
+   mode = 1
+   if (trim(e) == "0") mode = 0
+   if (trim(e) == "2") mode = 2
+endif
+if (mode > 0 .and. mdj_stale) then
+   nb_all = nBases + nBasesAux ; norb_c = nBases ; pure_c = merge(1, 0, engine_puream)
+   mdj_ghs = mdj_init(atm, basDF, nb_all, norb_c, envDF, pure_c)
+   mdj_npair = -1
+   mdj_stale = .false.
+endif
+dfj_md_mode = mode
+if (mode > 0 .and. mdj_ghs < 0) dfj_md_mode = 0
+end function dfj_md_mode
+
+subroutine df_coulomb_direct_md(nConts_in, Ptot, J, this_cutoff, dmax_shell, maxdiag, bout)
+use MOL_info
+use mod_profile, only: prof_start, prof_stop
+use omp_lib, only: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
+implicit none
+integer,intent(in) :: nConts_in
+real(8),intent(in) :: Ptot(nConts_in,nConts_in), this_cutoff, dmax_shell(0:nBases-1,0:nBases-1), maxdiag
+real(8),intent(out) :: J(nConts_in,nConts_in)
+real(8),allocatable,intent(out),optional :: bout(:)
+interface
+   subroutine mdj_bpass_pair(ish_, jsh_, D_, schw_, auxb_, cut_, G_) bind(C, name='mdj_bpass_pair')
+      import :: c_int, c_double
+      integer(c_int) :: ish_, jsh_
+      real(c_double) :: D_(*), schw_, auxb_(*), cut_, G_(*)
+   end subroutine
+   subroutine mdj_jpass_pair(ish_, jsh_, H_, schw_, auxb_, cut0_, cb_, cut_, Js_) bind(C, name='mdj_jpass_pair')
+      import :: c_int, c_double
+      integer(c_int) :: ish_, jsh_
+      real(c_double) :: H_(*), schw_, auxb_(*), cut0_, cb_(*), cut_, Js_(*)
+   end subroutine
+end interface
+real(8),allocatable :: G(:), Gl(:,:), bvec(:), tvec(:), cvec(:), cN(:), H(:), cb(:), Jl(:,:,:), Dblk(:,:), Jblk(:,:)
+integer(c_int) :: ish, jsh
+integer :: ip, di, dj, offi, offj, p, q, tid, ksh, offP, dk, mt
+real(8) :: schw, cut0
+
+cut0 = SCHWARZ_CUTOFF
+call mdj_pairs_ready(maxdiag)
+mt = omp_get_max_threads()
+allocate(G(mdj_ghs), Gl(mdj_ghs, mt), bvec(nContsAux), tvec(nContsAux), cvec(nContsAux))
+G = 0.0d0
+
+call prof_start("df_direct_bpass")
+!$omp parallel private(ip, ish, jsh, di, dj, offi, offj, p, q, tid, schw, Dblk)
+tid = omp_get_thread_num() + 1
+Gl(:,tid) = 0.0d0
+allocate(Dblk(maxval(df_shell_ncgto(0:nBases-1)), maxval(df_shell_ncgto(0:nBases-1))))
+!$omp do schedule(static,1)
+do ip = 1, mdj_npair
+   ish = mdj_pish(ip) ; jsh = mdj_pjsh(ip)
+   schw = schwarz_bound(ish,jsh)
+   if (schw*maxdiag*dmax_shell(ish,jsh) < this_cutoff) cycle
+   di = df_shell_ncgto(ish) ; dj = df_shell_ncgto(jsh)
+   offi = df_shell_offset(ish) ; offj = df_shell_offset(jsh)
+   do q = 1, dj
+      do p = 1, di
+         if (ish /= jsh) then
+            Dblk(p+(q-1)*di,1) = (Ptot(offi+p,offj+q) + Ptot(offj+q,offi+p))*NorVEC(offi+p)*NorVEC(offj+q)
+         else
+            Dblk(p+(q-1)*di,1) = Ptot(offi+p,offj+q)*NorVEC(offi+p)*NorVEC(offj+q)
+         endif
+      enddo
+   enddo
+   call mdj_bpass_pair(ish, jsh, Dblk, schw, aux_shell_bound, cut0, Gl(1,tid))
+enddo
+!$omp end do
+deallocate(Dblk)
+block
+   integer :: m
+   do m = 0, omp_get_num_threads()-1
+      !$omp barrier
+      if (omp_get_thread_num() == m) G = G + Gl(:,tid)
+   enddo
+end block
+!$omp end parallel
+bvec = 0.0d0
+call mdj_bfinal(G, bvec)
+bvec = bvec*NorVECAux
+call prof_stop("df_direct_bpass")
+
+call prof_start("df_direct_solve")
+call dgemv('T', nContsAux, nContsAux, 1.0d0, df_evec, nContsAux, bvec, 1, 0.0d0, tvec, 1)
+tvec = tvec * df_evalinv
+call dgemv('N', nContsAux, nContsAux, 1.0d0, df_evec, nContsAux, tvec, 1, 0.0d0, cvec, 1)
+if (.not. allocated(df_direct_cvec_cache)) then
+   allocate(df_direct_cvec_cache(nContsAux))
+   allocate(df_direct_cvec_cache_Ptot(nConts_in,nConts_in))
+endif
+df_direct_cvec_cache = cvec
+df_direct_cvec_cache_Ptot = Ptot
+df_direct_cvec_cache_valid = .true.
+allocate(cb(nBasesAux), cN(nContsAux), H(mdj_ghs))
+offP = 0
+do ksh = nBases, nBases+nBasesAux-1
+   dk = df_shell_ncgto(ksh)
+   cb(ksh-nBases+1) = maxval(abs(cvec(offP+1:offP+dk)))
+   offP = offP + dk
+enddo
+cN = cvec*NorVECAux
+call mdj_jprep(cN, H)
+call prof_stop("df_direct_solve")
+
+call prof_start("df_direct_jpass")
+J = 0.0d0
+!$omp parallel private(ip, ish, jsh, di, dj, offi, offj, p, q, schw, Jblk)
+allocate(Jblk(maxval(df_shell_ncgto(0:nBases-1)), maxval(df_shell_ncgto(0:nBases-1))))
+!$omp do schedule(static,1)
+do ip = 1, mdj_npair
+   ish = mdj_pish(ip) ; jsh = mdj_pjsh(ip)
+   schw = schwarz_bound(ish,jsh)
+   di = df_shell_ncgto(ish) ; dj = df_shell_ncgto(jsh)
+   offi = df_shell_offset(ish) ; offj = df_shell_offset(jsh)
+   call mdj_jpass_pair(ish, jsh, H, schw, aux_shell_bound, cut0, cb, this_cutoff, Jblk)
+   do q = 1, dj
+      do p = 1, di
+         J(offi+p,offj+q) = Jblk(p+(q-1)*di,1)*NorVEC(offi+p)*NorVEC(offj+q)
+      enddo
+   enddo
+   if (ish /= jsh) then
+      do q = 1, dj
+         do p = 1, di
+            J(offj+q,offi+p) = Jblk(p+(q-1)*di,1)*NorVEC(offi+p)*NorVEC(offj+q)
+         enddo
+      enddo
+   endif
+enddo
+!$omp end do
+deallocate(Jblk)
+!$omp end parallel
+call prof_stop("df_direct_jpass")
+if (present(bout)) then
+   allocate(bout(nContsAux)) ; bout = bvec
+endif
+deallocate(G, Gl, bvec, tvec, cvec, cN, H, cb)
+
+end subroutine df_coulomb_direct_md
+
+module subroutine df_mdj_force_j(nConts_in, Ptot, natoms_in, force3c, cvec, ok)
+use MOL_info
+use mod_profile, only: prof_start, prof_stop
+use omp_lib, only: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
+implicit none
+integer,intent(in) :: nConts_in, natoms_in
+real(8),intent(in) :: Ptot(nConts_in,nConts_in)
+real(8),intent(inout) :: force3c(natoms_in,3)
+real(8),intent(out) :: cvec(*)
+logical,intent(out) :: ok
+real(8),allocatable :: G(:), Gl(:,:), bvec(:), tvec(:), cN(:), H(:), gCl(:,:,:), gC(:,:), Dblk(:)
+real(8),allocatable :: fl(:,:,:)
+integer(c_int) :: ish, jsh
+integer :: ip, di, dj, offi, offj, p, q, tid, mt, ia, ja, m
+real(8) :: schw, cut0, maxdiag, gA(3), gB(3)
+
+ok = (dfj_md_mode() >= 1)
+if (.not. ok) return
+maxdiag = maxval(aux_shell_bound)
+call mdj_pairs_ready(maxdiag)
+cut0 = SCHWARZ_CUTOFF
+mt = omp_get_max_threads()
+allocate(cN(nContsAux), H(mdj_ghs))
+if (df_direct_cvec_cache_valid .and. all(df_direct_cvec_cache_Ptot .eq. Ptot)) then
+   cvec(1:nContsAux) = df_direct_cvec_cache
+else
+   call prof_start("df_force_direct_bpass")
+   allocate(G(mdj_ghs), Gl(mdj_ghs,mt), bvec(nContsAux), tvec(nContsAux))
+   G = 0.0d0
+!$omp parallel private(ip, ish, jsh, di, dj, offi, offj, p, q, tid, schw, Dblk)
+   tid = omp_get_thread_num() + 1
+   Gl(:,tid) = 0.0d0
+   allocate(Dblk(maxval(df_shell_ncgto(0:nBases-1))**2))
+!$omp do schedule(static,1)
+   do ip = 1, mdj_npair
+      ish = mdj_pish(ip) ; jsh = mdj_pjsh(ip)
+      schw = schwarz_bound(ish,jsh)
+      di = df_shell_ncgto(ish) ; dj = df_shell_ncgto(jsh)
+      offi = df_shell_offset(ish) ; offj = df_shell_offset(jsh)
+      call pair_dens(Ptot, ish, jsh, di, dj, offi, offj, Dblk)
+      call mdj_bpass_pair_g(ish, jsh, Dblk, schw, aux_shell_bound, cut0, Gl(1,tid))
+   enddo
+!$omp end do
+   deallocate(Dblk)
+   do m = 0, omp_get_num_threads()-1
+      !$omp barrier
+      if (omp_get_thread_num() == m) G = G + Gl(:,tid)
+   enddo
+!$omp end parallel
+   bvec = 0.0d0
+   call mdj_bfinal(G, bvec)
+   bvec = bvec*NorVECAux
+   call dgemv('T', nContsAux, nContsAux, 1.0d0, df_evec, nContsAux, bvec, 1, 0.0d0, tvec, 1)
+   tvec = tvec * df_evalinv
+   call dgemv('N', nContsAux, nContsAux, 1.0d0, df_evec, nContsAux, tvec, 1, 0.0d0, cvec, 1)
+   deallocate(G, Gl, bvec, tvec)
+   call prof_stop("df_force_direct_bpass")
+endif
+cN = cvec(1:nContsAux)*NorVECAux
+call mdj_jprep(cN, H)
+
+call prof_start("df_force_direct_contract")
+allocate(gC(3,nAtoms), gCl(3,nAtoms,mt), fl(natoms_in,3,mt))
+gC = 0.0d0
+!$omp parallel private(ip, ish, jsh, di, dj, offi, offj, p, q, tid, schw, Dblk, gA, gB, ia, ja)
+tid = omp_get_thread_num() + 1
+gCl(:,:,tid) = 0.0d0
+fl(:,:,tid) = 0.0d0
+allocate(Dblk(maxval(df_shell_ncgto(0:nBases-1))**2))
+!$omp do schedule(dynamic)
+do ip = 1, mdj_npair
+   ish = mdj_pish(ip) ; jsh = mdj_pjsh(ip)
+   schw = schwarz_bound(ish,jsh)
+   di = df_shell_ncgto(ish) ; dj = df_shell_ncgto(jsh)
+   offi = df_shell_offset(ish) ; offj = df_shell_offset(jsh)
+   call pair_dens(Ptot, ish, jsh, di, dj, offi, offj, Dblk)
+   call mdj_grad_pair(ish, jsh, Dblk, H, schw, aux_shell_bound, cut0, gA, gB, gCl(1,1,tid))
+   ia = basDF(1,ish+1) + 1 ; ja = basDF(1,jsh+1) + 1
+   fl(ia,:,tid) = fl(ia,:,tid) - gA
+   fl(ja,:,tid) = fl(ja,:,tid) - gB
+enddo
+!$omp end do
+deallocate(Dblk)
+!$omp end parallel
+do m = 1, mt
+   force3c = force3c + fl(:,:,m)
+   gC = gC + gCl(:,:,m)
+enddo
+do ia = 1, min(nAtoms, natoms_in)
+   force3c(ia,:) = force3c(ia,:) - gC(:,ia)
+enddo
+call prof_stop("df_force_direct_contract")
+deallocate(cN, H, gC, gCl, fl)
+
+contains
+
+subroutine pair_dens(Pt, is, js, ni, nj, oi, oj, Db)
+real(8),intent(in) :: Pt(nConts_in,nConts_in)
+integer(c_int),intent(in) :: is, js
+integer,intent(in) :: ni, nj, oi, oj
+real(8),intent(out) :: Db(*)
+integer :: a, b
+do b = 1, nj
+   do a = 1, ni
+      if (is /= js) then
+         Db(a+(b-1)*ni) = (Pt(oi+a,oj+b) + Pt(oj+b,oi+a))*NorVEC(oi+a)*NorVEC(oj+b)
+      else
+         Db(a+(b-1)*ni) = Pt(oi+a,oj+b)*NorVEC(oi+a)*NorVEC(oj+b)
+      endif
+   enddo
+enddo
+end subroutine pair_dens
+
+end subroutine df_mdj_force_j
+
+subroutine mdj_pairs_ready(maxdiag)
+real(8),intent(in) :: maxdiag
+integer(c_int) :: ish, jsh
+if (mdj_npair >= 0) return
+if (allocated(mdj_pish)) deallocate(mdj_pish, mdj_pjsh)
+mdj_npair = 0
+do ish = 0, nBases-1
+   do jsh = 0, ish
+      if (schwarz_bound(ish,jsh)*maxdiag >= SCHWARZ_CUTOFF) mdj_npair = mdj_npair + 1
+   enddo
+enddo
+allocate(mdj_pish(mdj_npair), mdj_pjsh(mdj_npair))
+mdj_npair = 0
+do ish = 0, nBases-1
+   do jsh = 0, ish
+      if (schwarz_bound(ish,jsh)*maxdiag >= SCHWARZ_CUTOFF) then
+         mdj_npair = mdj_npair + 1 ; mdj_pish(mdj_npair) = ish ; mdj_pjsh(mdj_npair) = jsh
+      endif
+   enddo
+enddo
+end subroutine mdj_pairs_ready
+
+module subroutine df_mdj_hess_b1(nConts_in, natoms_in, Ptot, own, nth, bvec, bx, ok)
+use MOL_info
+use omp_lib, only: omp_get_thread_num, omp_get_num_threads
+use iso_c_binding, only: c_int, c_long, c_double
+implicit none
+integer,intent(in) :: nConts_in, natoms_in, nth
+real(8),intent(in) :: Ptot(nConts_in,nConts_in)
+integer,intent(in) :: own(0:nBases-1,0:nBases-1)
+real(8),intent(out) :: bvec(nContsAux), bx(natoms_in,3,nContsAux)
+logical,intent(out) :: ok
+real(8),allocatable :: G0t(:,:), Gat(:,:,:,:), GKt(:,:,:), G0(:), Ga(:,:,:), GK(:,:), Dblk(:), cb(:), tmp(:)
+real(8),allocatable :: dmax_shell(:,:)
+integer(c_int) :: ish, jsh
+integer :: ip, di, dj, offi, offj, tid, atI, atJ, it, ia, ix, ik, nshp, io
+integer(c_long) :: ldG
+real(8) :: schw, cutv, maxdiag, gbmax
+character(len=16) :: ge
+
+ok = (dfj_md_mode() >= 1)
+if (.not. ok) return
+gbmax = 3.0d0
+call get_environment_variable("ENGINE_DFJ_MD_HESS_GB", ge)
+if (len_trim(ge) > 0) read(ge, *, iostat=io) gbmax
+if (8.0d0*(3.0d0*natoms_in + 4.0d0)*mdj_ghs*nth > gbmax*1.0d9) then
+   ok = .false.
+   return
+endif
+maxdiag = maxval(aux_shell_bound)
+call mdj_pairs_ready(maxdiag)
+ldG = mdj_ghs
+allocate(dmax_shell(0:nBases-1,0:nBases-1))
+call compute_shell_density_bound(nConts_in, Ptot, dmax_shell)
+allocate(G0t(mdj_ghs,nth), Gat(mdj_ghs,3,natoms_in,nth), GKt(mdj_ghs,3,nth))
+G0t = 0.0d0 ; Gat = 0.0d0 ; GKt = 0.0d0
+!$omp parallel default(shared) num_threads(nth) private(ip, ish, jsh, di, dj, offi, offj, tid, atI, atJ, schw, cutv, Dblk)
+tid = omp_get_thread_num() + 1
+if (omp_get_num_threads() .ne. nth) error stop 'df_mdj_hess_b1: thread team smaller than planned'
+allocate(Dblk(maxval(df_shell_ncgto(0:nBases-1))**2))
+do ip = 1, mdj_npair
+   ish = mdj_pish(ip) ; jsh = mdj_pjsh(ip)
+   if (own(ish,jsh) .ne. tid) cycle
+   schw = schwarz_bound(ish,jsh)
+   if (dmax_shell(ish,jsh) <= 0.0d0) cycle
+   cutv = max(SCHWARZ_CUTOFF, density_screen_cutoff/dmax_shell(ish,jsh))
+   di = df_shell_ncgto(ish) ; dj = df_shell_ncgto(jsh)
+   offi = df_shell_offset(ish) ; offj = df_shell_offset(jsh)
+   atI = basDF(1,ish+1) + 1 ; atJ = basDF(1,jsh+1) + 1
+   call mdj_pair_dens(Ptot, ish, jsh, di, dj, offi, offj, Dblk, nConts_in)
+   call mdj_b1_pair(ish, jsh, Dblk, schw, aux_shell_bound, cutv, ldG, G0t(1,tid), Gat(1,1,atI,tid), &
+                    Gat(1,1,atJ,tid), GKt(1,1,tid))
+enddo
+deallocate(Dblk)
+!$omp end parallel
+allocate(G0(mdj_ghs), Ga(mdj_ghs,3,natoms_in), GK(mdj_ghs,3), cb(nContsAux), tmp(nContsAux))
+G0 = 0.0d0 ; Ga = 0.0d0 ; GK = 0.0d0
+do tid = 1, nth
+   G0 = G0 + G0t(:,tid)
+   Ga = Ga + Gat(:,:,:,tid)
+   GK = GK + GKt(:,:,tid)
+enddo
+deallocate(G0t, Gat, GKt)
+bvec = 0.0d0
+call mdj_bfinal(G0, bvec)
+bvec = bvec*NorVECAux
+bx = 0.0d0
+do ia = 1, natoms_in
+   do ix = 1, 3
+      tmp = 0.0d0
+      call mdj_bfinal(Ga(1,ix,ia), tmp)
+      bx(ia,ix,:) = tmp*NorVECAux
+   enddo
+enddo
+do ix = 1, 3
+   tmp = 0.0d0
+   call mdj_bfinal(GK(1,ix), tmp)
+   tmp = tmp*NorVECAux
+   io = 0
+   do ik = nBases, nBases+nBasesAux-1
+      nshp = df_shell_ncgto(ik)
+      ia = basDF(1,ik+1) + 1
+      do it = 1, nshp
+         bx(ia,ix,io+it) = bx(ia,ix,io+it) + tmp(io+it)
+      enddo
+      io = io + nshp
+   enddo
+enddo
+deallocate(G0, Ga, GK, cb, tmp, dmax_shell)
+end subroutine df_mdj_hess_b1
+
+module subroutine df_mdj_hess_pass3(nConts_in, natoms_in, Ptot, cvec, own, nth, d2E_t, ok)
+use MOL_info
+use omp_lib, only: omp_get_thread_num, omp_get_num_threads
+use iso_c_binding, only: c_int, c_long, c_double
+implicit none
+integer,intent(in) :: nConts_in, natoms_in, nth
+real(8),intent(in) :: Ptot(nConts_in,nConts_in), cvec(nContsAux)
+integer,intent(in) :: own(0:nBases-1,0:nBases-1)
+real(8),intent(inout) :: d2E_t(3,natoms_in,3,natoms_in,nth)
+logical,intent(out) :: ok
+real(8),allocatable :: H(:), cN(:), Dblk(:), dmax_shell(:,:)
+integer(c_int) :: ish, jsh, nat_c, aI, aJ
+integer :: ip, di, dj, offi, offj, tid
+real(8) :: schw, cutv, maxdiag
+
+ok = (dfj_md_mode() >= 1)
+if (.not. ok) return
+maxdiag = maxval(aux_shell_bound)
+call mdj_pairs_ready(maxdiag)
+allocate(H(mdj_ghs), cN(nContsAux), dmax_shell(0:nBases-1,0:nBases-1))
+cN = cvec*NorVECAux
+call mdj_jprep(cN, H)
+call compute_shell_density_bound(nConts_in, Ptot, dmax_shell)
+nat_c = natoms_in
+!$omp parallel default(shared) num_threads(nth) private(ip, ish, jsh, di, dj, offi, offj, tid, aI, aJ, schw, cutv, Dblk)
+tid = omp_get_thread_num() + 1
+if (omp_get_num_threads() .ne. nth) error stop 'df_mdj_hess_pass3: thread team smaller than planned'
+allocate(Dblk(maxval(df_shell_ncgto(0:nBases-1))**2))
+do ip = 1, mdj_npair
+   ish = mdj_pish(ip) ; jsh = mdj_pjsh(ip)
+   if (own(ish,jsh) .ne. tid) cycle
+   schw = schwarz_bound(ish,jsh)
+   if (dmax_shell(ish,jsh) <= 0.0d0) cycle
+   cutv = max(SCHWARZ_CUTOFF, density_screen_cutoff/dmax_shell(ish,jsh))
+   di = df_shell_ncgto(ish) ; dj = df_shell_ncgto(jsh)
+   offi = df_shell_offset(ish) ; offj = df_shell_offset(jsh)
+   aI = basDF(1,ish+1) ; aJ = basDF(1,jsh+1)
+   call mdj_pair_dens(Ptot, ish, jsh, di, dj, offi, offj, Dblk, nConts_in)
+   call mdj_hess_pair(ish, jsh, Dblk, H, schw, aux_shell_bound, cutv, nat_c, aI, aJ, d2E_t(1,1,1,1,tid))
+enddo
+deallocate(Dblk)
+!$omp end parallel
+deallocate(H, cN, dmax_shell)
+end subroutine df_mdj_hess_pass3
+
+subroutine mdj_pair_dens(Pt, is, js, ni, nj, oi, oj, Db, n)
+integer,intent(in) :: n
+real(8),intent(in) :: Pt(n,n)
+integer(c_int),intent(in) :: is, js
+integer,intent(in) :: ni, nj, oi, oj
+real(8),intent(out) :: Db(*)
+integer :: a, b
+do b = 1, nj
+   do a = 1, ni
+      if (is /= js) then
+         Db(a+(b-1)*ni) = (Pt(oi+a,oj+b) + Pt(oj+b,oi+a))*NorVEC(oi+a)*NorVEC(oj+b)
+      else
+         Db(a+(b-1)*ni) = Pt(oi+a,oj+b)*NorVEC(oi+a)*NorVEC(oj+b)
+      endif
+   enddo
+enddo
+end subroutine mdj_pair_dens
+
+module subroutine df_mdj_jx_prepare(cvec, H, ok)
+implicit none
+real(8),intent(in) :: cvec(nContsAux)
+real(8),allocatable,intent(out) :: H(:)
+logical,intent(out) :: ok
+real(8),allocatable :: cN(:)
+ok = (dfj_md_mode() >= 1)
+block
+   character(len=4) :: je
+   call get_environment_variable("ENGINE_DFJ_MD_JX", je)
+   if (trim(je) == "0") ok = .false.
+end block
+if (.not. ok) return
+allocate(H(mdj_ghs), cN(nContsAux))
+cN = cvec*NorVECAux
+call mdj_jprep(cN, H)
+end subroutine df_mdj_jx_prepare
+
+module subroutine df_mdj_jx_pair(ish, jsh, H, nat, SA, SB, nK, Klist, SK)
+implicit none
+integer,intent(in) :: ish, jsh, nat
+real(8),intent(in) :: H(*)
+real(8),intent(out) :: SA(*), SB(*), SK(*)
+integer,intent(out) :: nK, Klist(nat)
+integer(c_int) :: ic, jc, nc, nkc
+real(8) :: schw, cut
+ic = ish ; jc = jsh ; nc = nat
+schw = schwarz_bound(ish,jsh)
+cut = SCHWARZ_CUTOFF
+call mdj_jx_pair(ic, jc, H, schw, aux_shell_bound, cut, nc, SA, SB, nkc, Klist, SK)
+nK = nkc
+end subroutine df_mdj_jx_pair
 
 end submodule df_coulomb_impl

@@ -6,6 +6,6 @@ Static dipole polarizability (`runtype = 'polar'`), water PBE0/def2-SVP, RIJCOSX
 
 Run with `./Direwolf water_polar.inp`. Closed-shell HF, global hybrids and (meta-)GGA with J = exact or
 RI and K = exact or cosx are supported. Not implemented: open shell, range-separated hybrids with exact
-exchange, solvent models, point charges, and `polar` together with `opt` (optimize first, then run
+exchange, and `polar` together with `opt` (optimize first, then run
 `polar` on the result). The coupled-perturbed equations are solved to 1e-8 (the Hessian uses 5e-5), on the
 SCF grid.

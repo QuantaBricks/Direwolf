@@ -15,7 +15,7 @@ H    0.0000   -0.7700   -0.4800
 &end
 
 &opt
- opt_conv = 'loose'
- opt_gmax = 1.0e-3     ! Hartree/bohr, replaces the level's own value
- opt_smax = 5.0e-3     ! bohr
+ convergence = 'loose'
+ max_force = 1.0e-3     ! Hartree/bohr, replaces the level's own value
+ max_disp = 5.0e-3     ! bohr
 &end

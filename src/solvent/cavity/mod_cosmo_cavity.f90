@@ -41,7 +41,7 @@ if (present(Rvdw_override)) then
    Rvdw = Rvdw_override
 else
    do ia = 1,natoms
-      Rvdw(ia) = cosmo_radius_bohr(Z(ia), radii_scale)
+      Rvdw(ia) = cosmo_cavity_radius_bohr(Z(ia), radii_scale)
    enddo
 endif
 
@@ -135,7 +135,7 @@ if (present(Rvdw_override)) then
    Rvdw = Rvdw_override
 else
    do ia = 1,natoms
-      Rvdw(ia) = cosmo_radius_bohr(Z(ia), radii_scale)
+      Rvdw(ia) = cosmo_cavity_radius_bohr(Z(ia), radii_scale)
    enddo
 endif
 

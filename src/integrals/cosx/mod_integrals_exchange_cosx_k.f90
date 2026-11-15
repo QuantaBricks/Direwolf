@@ -26,6 +26,10 @@ real(8),intent(out) :: Ka(nConts,nConts), Kb(nConts,nConts)
 logical,intent(in) :: need_force
 
 integer :: ib, nblocks, bstart, nb, g
+real(8) :: tw_a, tw_b, tw_c, tw_d
+real(8) :: tk(6), tk0, tk_tot(6)
+logical :: kdev
+real(8),allocatable :: sgn_b(:)
 integer :: si, sj, di, dj, i, j, ao_i, ao_j, maxd, sj_idx
 integer :: shls1e(4), off_grids
 real(8) :: nij, wij, x_block_max, k_bound
@@ -91,6 +95,7 @@ integer :: kv_of(4)
 real(8),allocatable :: kvi(:), kvj(:), koi(:), koj(:), ksg(:)
 real(8),allocatable :: Pha(:,:), Phb(:,:), Gta(:,:), Gtb(:,:)
 
+tw_a = omp_get_wtime()
 if (.not. cosx_k_nonvar_checked) then
    call get_environment_variable("ENGINE_COSX_K_NONVAR", envchar, status=envstat)
    cosx_k_nonvar = (envstat .eq. 0 .and. trim(envchar) .eq. "1")
@@ -164,6 +169,7 @@ if (.not. cosx_ready .or. cosx_needs_rebuild .or. cosx_nBases_cached .ne. nBases
                                 cosx_QfullT_md, cosx_blkstart_md, cosx_nblk_md, intacc_eps=4.020d0, &
                                 per_atom_period_scale=cosx_peratom_lomd, atom_of_out=cosx_atom_scratch)
    endif
+   call cosx_free_td_grid()
    if (allocated(cosx_coor_lo)) deallocate(cosx_coor_lo,cosx_w_lo,cosx_Qfull_lo)
    if (allocated(cosx_QfullT_lo)) deallocate(cosx_QfullT_lo)
    if (allocated(cosx_blkptr_lo)) deallocate(cosx_blkptr_lo,cosx_blkidx_lo)
@@ -238,6 +244,7 @@ endif
 stage_changed = (stage_now .ne. cosx_stage_prev)
 do_incremental = cosx_incr_valid .and. (.not. stage_changed) .and. (cosx_stage_settle .eq. 0) &
                   .and. (.not. cosx_no_incremental) .and. (.not. cosx_response_mode)
+call cosx_note_rss('K build, entry')
 cosx_G_hi_valid = .false.
 is_full_hi_build = cosx_keep_g_cache .and. need_force .and. (.not. do_incremental) .and. (stage_now .eq. 3)
 cosx_need_force_hi = need_force
@@ -300,7 +307,7 @@ if (do_incremental) then
    allocate(D_weighted_max(0:nBases-1))
    !$omp parallel do default(shared) private(si) schedule(dynamic)
    do si = 0,nBases-1
-      D_weighted_max(si) = maxval(cosx_esp_bound(si,:) * D_pair_max(si,:))
+      D_weighted_max(si) = maxval(cosx_esp_bound(si,:) * D_pair_max(si,:))*(1.0d0 + abs(cosx_fuse_c))
    enddo
    !$omp end parallel do
 else
@@ -317,6 +324,7 @@ do ib = 0,nblocks-1
    maxnloc = max(maxnloc, nloc)
 enddo
 xmax_this_call = 0.0d0
+tk_tot = 0.0d0
 skip_total = 0
 n_geo_total = 0; n_schwarz_total = 0; n_calls_total = 0
 skip_pts_total = 0
@@ -332,6 +340,10 @@ if (.not. same_spin) then
    if (do_var) then; nvk = nvk + 1 ; kv_of(nvk) = 4; endif
 endif
 
+call cosx_note_rss('K build, before the card set-up')
+tw_b = omp_get_wtime()
+kdev = .false.
+call cosx_note_rss('K build, before the threads')
 !$omp parallel default(shared) &
 !$omp&   private(ib,bstart,nb,g,si,sj,di,dj,i,j,ao_i,ao_j,shls1e,off_grids,nij,wij) &
 !$omp&   private(coor_batch,w_batch,Xb,val1_dummy,Fa,Fb,Ga,Gb,env_g,buf,int_cache,Ka_local,Kb_local,Qb) &
@@ -342,9 +354,11 @@ endif
 !$omp&   private(run_a,run_o,run_len,nrun,ir,a0,dsh,prev_end,bet) &
 !$omp&   private(tau_hit,trun_a,trun_len,ntrun,it,extend_run) &
 !$omp&   private(dbg_t0,dbg_t1,dbg_tick_local,Pha,Phb,Gta,Gtb,dbg_g_local) &
-!$omp&   private(kvi,kvj,koi,koj,ksg,iv,rc_k,kk_i)
+!$omp&   private(kvi,kvj,koi,koj,ksg,iv,rc_k,kk_i) &
+!$omp&   private(tk,tk0)
 dbg_tick_local = 0_8
 dbg_g_local = 0_8
+tk = 0.0d0
 allocate(buf(BATCH*maxd*maxd))
 allocate(int_cache(INT_CACHE_SIZE))
 if (k_contract) allocate(kvi(BATCH*maxd*4), kvj(BATCH*maxd*4), koi(BATCH*maxd*4), &
@@ -352,9 +366,11 @@ if (k_contract) allocate(kvi(BATCH*maxd*4), kvj(BATCH*maxd*4), koi(BATCH*maxd*4)
 allocate(loc_ao(maxnloc))
 allocate(run_a(nBases), run_o(nBases), run_len(nBases))
 allocate(tau_hit(0:nBases-1), trun_a(nBases), trun_len(nBases))
-allocate(Ka_local(nConts,nConts), Kb_local(nConts,nConts))
-Ka_local = 0.0d0
-Kb_local = 0.0d0
+if (.not. kdev) then
+   allocate(Ka_local(nConts,nConts), Kb_local(nConts,nConts))
+   Ka_local = 0.0d0
+   Kb_local = 0.0d0
+endif
 xmax_local = 0.0d0
 skip_local = 0
 n_geo_local = 0; n_schwarz_local = 0; n_calls_local = 0
@@ -362,6 +378,10 @@ skip_pts_local = 0
 allocate(env_g(size(env) + 3*BATCH))
 env_g(1:size(env)) = env(1:size(env))
 off_grids = size(env)
+if (cosx_fuse_omega .gt. 0.0d0) then
+   env_g(9) = -cosx_fuse_omega
+   env_g(14) = cosx_fuse_c
+endif
 
 !$omp do schedule(static,1)
 do ib = 0,nblocks-1
@@ -390,10 +410,11 @@ do ib = 0,nblocks-1
             else
                esp_eff = cosx_esp_bound(si,sj)
             endif
+            esp_eff = esp_eff*(1.0d0 + abs(cosx_fuse_c))
             local_D_max = max(local_D_max, esp_eff*D_pair_max(si,sj))
          enddo
       enddo
-      local_D_max = max(local_D_max, cosx_ext_threshold*global_D_max)
+      local_D_max = max(local_D_max, cosx_ext_threshold*global_D_max*(1.0d0 + abs(cosx_fuse_c)))
       block_bound = (cosx_Xblock_p(ib+1)**2) * dble(maxd) * local_D_max
       if (block_bound .lt. kscreen_use) then
          skip_local = skip_local + 1
@@ -435,6 +456,7 @@ do ib = 0,nblocks-1
       cycle
    endif
 
+   tk0 = omp_get_wtime()
    allocate(Xc(nloc,nb), val1_dummy(nloc,3,nb))
    Xc = 0.0d0
    cofs = 0
@@ -449,6 +471,7 @@ do ib = 0,nblocks-1
       Xc(:,g) = Xc(:,g) * sqrt(abs(w_batch(g)))
    enddo
 
+   tk(1) = tk(1) + omp_get_wtime() - tk0 ; tk0 = omp_get_wtime()
    allocate(Fa(nb,nConts), Fb(nb,nConts))
    do ir = 1,nrun
       bet = merge(1.0d0, 0.0d0, ir .gt. 1)
@@ -474,6 +497,7 @@ do ib = 0,nblocks-1
       enddo
    endif
 
+   tk(2) = tk(2) + omp_get_wtime() - tk0 ; tk0 = omp_get_wtime()
    if (cosx_overlap_fit) then
       allocate(Qb(nConts,nb))
       do ir = 1,nrun
@@ -502,9 +526,10 @@ do ib = 0,nblocks-1
       Gtb = 0.0d0
    endif
 
-   allocate(Ga(nb,nConts), Gb(nb,nConts))
-   Ga = 0.0d0
-   Gb = 0.0d0
+   tk(3) = tk(3) + omp_get_wtime() - tk0 ; tk0 = omp_get_wtime()
+      allocate(Ga(nb,nConts), Gb(nb,nConts))
+      Ga = 0.0d0
+      Gb = 0.0d0
    tau_hit = .false.
 
    do g = 1,nb
@@ -542,6 +567,7 @@ do ib = 0,nblocks-1
          else
             esp_eff = cosx_esp_bound(si,sj)
          endif
+         esp_eff = esp_eff*(1.0d0 + abs(cosx_fuse_c))
          if (do_incremental) then
             pair_bound = x_block_max*esp_eff*D_pair_max(si,sj)
             if (pair_bound .lt. kscreen_use) cycle
@@ -668,6 +694,9 @@ do ib = 0,nblocks-1
       enddo
    enddo
 
+   tk(4) = tk(4) + omp_get_wtime() - tk0 ; tk0 = omp_get_wtime()
+
+   tk(5) = tk(5) + omp_get_wtime() - tk0 ; tk0 = omp_get_wtime()
    if (is_full_hi_build) then
       cosx_G_hi_a(bstart:bstart+nb-1,:) = Ga
       if (same_spin) then
@@ -760,6 +789,7 @@ do ib = 0,nblocks-1
       deallocate(Kc)
    endif
 
+   tk(6) = tk(6) + omp_get_wtime() - tk0
    deallocate(coor_batch,w_batch,Xc,Fa,Fb,Ga,Gb,F_gmax)
 enddo
 !$omp end do
@@ -770,8 +800,15 @@ block
    do merge_tid = 0, merge_nthreads-1
       !$omp barrier
       if (omp_get_thread_num() .eq. merge_tid) then
+      if (kdev) then
+         allocate(Ka_local(nConts,nConts), Kb_local(nConts,nConts))
+         Ka_local = 0.0d0
+         Kb_local = 0.0d0
+      endif
       Ka = Ka + Ka_local
+      tk_tot = tk_tot + tk
       if (.not. same_spin) Kb = Kb + Kb_local
+      if (kdev) deallocate(Ka_local, Kb_local)
       xmax_this_call = max(xmax_this_call, xmax_local)
       skip_total = skip_total + skip_local
       n_geo_total = n_geo_total + n_geo_local
@@ -785,10 +822,19 @@ block
       endif
    enddo
 end block
-deallocate(buf,int_cache,Ka_local,Kb_local,env_g)
+deallocate(buf,int_cache,env_g)
+if (allocated(Ka_local)) deallocate(Ka_local)
+if (allocated(Kb_local)) deallocate(Kb_local)
 if (k_contract) deallocate(kvi,kvj,koi,koj,ksg)
 deallocate(loc_ao,run_a,run_o,run_len,tau_hit,trun_a,trun_len)
 !$omp end parallel
+call cosx_note_rss('K build, after the threads')
+block
+   integer,save :: n_inv = 0
+   n_inv = n_inv + 1
+   if (n_inv .eq. 3 .and. engine_verbose .ge. 2) call cosx_mem_inventory()
+end block
+tw_c = omp_get_wtime()
 
 if (is_full_hi_build) cosx_G_hi_valid = .true.
 if (ktm_on) then
@@ -800,6 +846,9 @@ if (ktm_on) then
 endif
 
 if (engine_verbose .ge. 2) then
+   print '(A,3F8.3)', " COSX K wall (s): before the block loop, block loop, after (up to this print):", &
+         tw_b - tw_a, tw_c - tw_b, omp_get_wtime() - tw_c
+   print '(A,6F8.2)', " COSX K phases (thread-s): AO eval, F + F_gmax, Q + Ph, pair loop, pair contraction, K contraction:", tk_tot
    print '(A,I1,A,ES9.2,A,I0,A,I0,A,I0,A,I0,A)', "COSX: stage=",stage_now, &
          " global_D_max=",global_D_max," skipped ",skip_total,"/",nblocks," blocks (", &
          skip_pts_total,"/",npts," grid points)"
@@ -845,6 +894,124 @@ deallocate(Da_eff, Db_eff)
 if (allocated(D_pair_max)) deallocate(D_pair_max)
 if (allocated(D_weighted_max)) deallocate(D_weighted_max)
 call cosx_malloc_trim()
+if (engine_verbose .ge. 2) print '(A,F8.3)', " COSX K total (s):", omp_get_wtime() - tw_a
 
 end subroutine integrals_build_exchange_cosx
+
+subroutine cosx_note_rss(label)
+use mod_meminfo, only: get_process_memory_bytes
+use MOL_info, only: engine_verbose
+implicit none
+character(len=*),intent(in) :: label
+integer(8) :: rss, hwm
+if (engine_verbose .lt. 2) return
+call get_process_memory_bytes(rss, hwm)
+print '(A,A,A,F7.2,A,F7.2,A)', " [mem] COSX ", label, ": RSS ", real(rss,8)/1024.0d0**3, &
+      " GB, peak ", real(hwm,8)/1024.0d0**3, " GB"
+call flush(6)
+end subroutine cosx_note_rss
+
+subroutine cosx_mem_inventory()
+use mod_meminfo, only: mem_inv_add, mem_inv_report
+implicit none
+if (allocated(cosx_shell_atom)) call mem_inv_add('cosx_shell_atom', 8_8*size(cosx_shell_atom,kind=8))
+if (allocated(cosx_shell_local)) call mem_inv_add('cosx_shell_local', 8_8*size(cosx_shell_local,kind=8))
+if (allocated(cosx_ao_offset)) call mem_inv_add('cosx_ao_offset', 8_8*size(cosx_ao_offset,kind=8))
+if (allocated(cosx_shell_dim)) call mem_inv_add('cosx_shell_dim', 8_8*size(cosx_shell_dim,kind=8))
+if (allocated(cosx_coor_lo)) call mem_inv_add('cosx_coor_lo', 8_8*size(cosx_coor_lo,kind=8))
+if (allocated(cosx_w_lo)) call mem_inv_add('cosx_w_lo', 8_8*size(cosx_w_lo,kind=8))
+if (allocated(cosx_Qfull_lo)) call mem_inv_add('cosx_Qfull_lo', 8_8*size(cosx_Qfull_lo,kind=8))
+if (allocated(cosx_coor_md)) call mem_inv_add('cosx_coor_md', 8_8*size(cosx_coor_md,kind=8))
+if (allocated(cosx_w_md)) call mem_inv_add('cosx_w_md', 8_8*size(cosx_w_md,kind=8))
+if (allocated(cosx_Qfull_md)) call mem_inv_add('cosx_Qfull_md', 8_8*size(cosx_Qfull_md,kind=8))
+if (allocated(cosx_coor_hi)) call mem_inv_add('cosx_coor_hi', 8_8*size(cosx_coor_hi,kind=8))
+if (allocated(cosx_w_hi)) call mem_inv_add('cosx_w_hi', 8_8*size(cosx_w_hi,kind=8))
+if (allocated(cosx_Qfull_hi)) call mem_inv_add('cosx_Qfull_hi', 8_8*size(cosx_Qfull_hi,kind=8))
+if (allocated(cosx_QfullT_lo)) call mem_inv_add('cosx_QfullT_lo', 8_8*size(cosx_QfullT_lo,kind=8))
+if (allocated(cosx_QfullT_md)) call mem_inv_add('cosx_QfullT_md', 8_8*size(cosx_QfullT_md,kind=8))
+if (allocated(cosx_QfullT_hi)) call mem_inv_add('cosx_QfullT_hi', 8_8*size(cosx_QfullT_hi,kind=8))
+if (allocated(cosx_atom_hi)) call mem_inv_add('cosx_atom_hi', 8_8*size(cosx_atom_hi,kind=8))
+if (allocated(cosx_Snum_lu_hi)) call mem_inv_add('cosx_Snum_lu_hi', 8_8*size(cosx_Snum_lu_hi,kind=8))
+if (allocated(cosx_ipiv_hi)) call mem_inv_add('cosx_ipiv_hi', 8_8*size(cosx_ipiv_hi,kind=8))
+if (allocated(cosx_blkptr_lo)) call mem_inv_add('cosx_blkptr_lo', 8_8*size(cosx_blkptr_lo,kind=8))
+if (allocated(cosx_blkidx_lo)) call mem_inv_add('cosx_blkidx_lo', 8_8*size(cosx_blkidx_lo,kind=8))
+if (allocated(cosx_blkptr_md)) call mem_inv_add('cosx_blkptr_md', 8_8*size(cosx_blkptr_md,kind=8))
+if (allocated(cosx_blkidx_md)) call mem_inv_add('cosx_blkidx_md', 8_8*size(cosx_blkidx_md,kind=8))
+if (allocated(cosx_blkptr_hi)) call mem_inv_add('cosx_blkptr_hi', 8_8*size(cosx_blkptr_hi,kind=8))
+if (allocated(cosx_blkidx_hi)) call mem_inv_add('cosx_blkidx_hi', 8_8*size(cosx_blkidx_hi,kind=8))
+if (allocated(cosx_coor_td)) call mem_inv_add('cosx_coor_td', 8_8*size(cosx_coor_td,kind=8))
+if (allocated(cosx_w_td)) call mem_inv_add('cosx_w_td', 8_8*size(cosx_w_td,kind=8))
+if (allocated(cosx_Qfull_td)) call mem_inv_add('cosx_Qfull_td', 8_8*size(cosx_Qfull_td,kind=8))
+if (allocated(cosx_QfullT_td)) call mem_inv_add('cosx_QfullT_td', 8_8*size(cosx_QfullT_td,kind=8))
+if (allocated(cosx_blkcen_td)) call mem_inv_add('cosx_blkcen_td', 8_8*size(cosx_blkcen_td,kind=8))
+if (allocated(cosx_blkrad_td)) call mem_inv_add('cosx_blkrad_td', 8_8*size(cosx_blkrad_td,kind=8))
+if (allocated(cosx_blkptr_td)) call mem_inv_add('cosx_blkptr_td', 8_8*size(cosx_blkptr_td,kind=8))
+if (allocated(cosx_blkidx_td)) call mem_inv_add('cosx_blkidx_td', 8_8*size(cosx_blkidx_td,kind=8))
+if (allocated(cosx_blkstart_td)) call mem_inv_add('cosx_blkstart_td', 8_8*size(cosx_blkstart_td,kind=8))
+if (allocated(cosx_atom_td)) call mem_inv_add('cosx_atom_td', 8_8*size(cosx_atom_td,kind=8))
+if (allocated(cosx_ipiv_td)) call mem_inv_add('cosx_ipiv_td', 8_8*size(cosx_ipiv_td,kind=8))
+if (allocated(cosx_Snum_lu_td)) call mem_inv_add('cosx_Snum_lu_td', 8_8*size(cosx_Snum_lu_td,kind=8))
+if (allocated(cosx_coor_gx)) call mem_inv_add('cosx_coor_gx', 8_8*size(cosx_coor_gx,kind=8))
+if (allocated(cosx_w_gx)) call mem_inv_add('cosx_w_gx', 8_8*size(cosx_w_gx,kind=8))
+if (allocated(cosx_Qfull_gx)) call mem_inv_add('cosx_Qfull_gx', 8_8*size(cosx_Qfull_gx,kind=8))
+if (allocated(cosx_QfullT_gx)) call mem_inv_add('cosx_QfullT_gx', 8_8*size(cosx_QfullT_gx,kind=8))
+if (allocated(cosx_blkcen_gx)) call mem_inv_add('cosx_blkcen_gx', 8_8*size(cosx_blkcen_gx,kind=8))
+if (allocated(cosx_blkrad_gx)) call mem_inv_add('cosx_blkrad_gx', 8_8*size(cosx_blkrad_gx,kind=8))
+if (allocated(cosx_Snum_lu_gx)) call mem_inv_add('cosx_Snum_lu_gx', 8_8*size(cosx_Snum_lu_gx,kind=8))
+if (allocated(cosx_blkptr_gx)) call mem_inv_add('cosx_blkptr_gx', 8_8*size(cosx_blkptr_gx,kind=8))
+if (allocated(cosx_blkidx_gx)) call mem_inv_add('cosx_blkidx_gx', 8_8*size(cosx_blkidx_gx,kind=8))
+if (allocated(cosx_blkstart_gx)) call mem_inv_add('cosx_blkstart_gx', 8_8*size(cosx_blkstart_gx,kind=8))
+if (allocated(cosx_atom_gx)) call mem_inv_add('cosx_atom_gx', 8_8*size(cosx_atom_gx,kind=8))
+if (allocated(cosx_ipiv_gx)) call mem_inv_add('cosx_ipiv_gx', 8_8*size(cosx_ipiv_gx,kind=8))
+if (allocated(cosx_blkstart_lo)) call mem_inv_add('cosx_blkstart_lo', 8_8*size(cosx_blkstart_lo,kind=8))
+if (allocated(cosx_blkstart_md)) call mem_inv_add('cosx_blkstart_md', 8_8*size(cosx_blkstart_md,kind=8))
+if (allocated(cosx_blkstart_hi)) call mem_inv_add('cosx_blkstart_hi', 8_8*size(cosx_blkstart_hi,kind=8))
+if (allocated(cosx_blkcen_lo)) call mem_inv_add('cosx_blkcen_lo', 8_8*size(cosx_blkcen_lo,kind=8))
+if (allocated(cosx_blkrad_lo)) call mem_inv_add('cosx_blkrad_lo', 8_8*size(cosx_blkrad_lo,kind=8))
+if (allocated(cosx_blkcen_md)) call mem_inv_add('cosx_blkcen_md', 8_8*size(cosx_blkcen_md,kind=8))
+if (allocated(cosx_blkrad_md)) call mem_inv_add('cosx_blkrad_md', 8_8*size(cosx_blkrad_md,kind=8))
+if (allocated(cosx_blkcen_hi)) call mem_inv_add('cosx_blkcen_hi', 8_8*size(cosx_blkcen_hi,kind=8))
+if (allocated(cosx_blkrad_hi)) call mem_inv_add('cosx_blkrad_hi', 8_8*size(cosx_blkrad_hi,kind=8))
+if (allocated(cosx_shell_cen)) call mem_inv_add('cosx_shell_cen', 8_8*size(cosx_shell_cen,kind=8))
+if (allocated(cosx_shell_extent)) call mem_inv_add('cosx_shell_extent', 8_8*size(cosx_shell_extent,kind=8))
+if (allocated(cosx_D_incr_a)) call mem_inv_add('cosx_D_incr_a', 8_8*size(cosx_D_incr_a,kind=8))
+if (allocated(cosx_D_incr_b)) call mem_inv_add('cosx_D_incr_b', 8_8*size(cosx_D_incr_b,kind=8))
+if (allocated(cosx_Ka_prev)) call mem_inv_add('cosx_Ka_prev', 8_8*size(cosx_Ka_prev,kind=8))
+if (allocated(cosx_Kb_prev)) call mem_inv_add('cosx_Kb_prev', 8_8*size(cosx_Kb_prev,kind=8))
+if (allocated(cosx_D_incr_a_lr)) call mem_inv_add('cosx_D_incr_a_lr', 8_8*size(cosx_D_incr_a_lr,kind=8))
+if (allocated(cosx_D_incr_b_lr)) call mem_inv_add('cosx_D_incr_b_lr', 8_8*size(cosx_D_incr_b_lr,kind=8))
+if (allocated(cosx_Ka_prev_lr)) call mem_inv_add('cosx_Ka_prev_lr', 8_8*size(cosx_Ka_prev_lr,kind=8))
+if (allocated(cosx_Kb_prev_lr)) call mem_inv_add('cosx_Kb_prev_lr', 8_8*size(cosx_Kb_prev_lr,kind=8))
+if (allocated(cosx_D_incr_a_sr)) call mem_inv_add('cosx_D_incr_a_sr', 8_8*size(cosx_D_incr_a_sr,kind=8))
+if (allocated(cosx_D_incr_b_sr)) call mem_inv_add('cosx_D_incr_b_sr', 8_8*size(cosx_D_incr_b_sr,kind=8))
+if (allocated(cosx_Ka_prev_sr)) call mem_inv_add('cosx_Ka_prev_sr', 8_8*size(cosx_Ka_prev_sr,kind=8))
+if (allocated(cosx_Kb_prev_sr)) call mem_inv_add('cosx_Kb_prev_sr', 8_8*size(cosx_Kb_prev_sr,kind=8))
+if (allocated(cosx_esp_bound)) call mem_inv_add('cosx_esp_bound', 8_8*size(cosx_esp_bound,kind=8))
+if (allocated(cosx_esp_mono)) call mem_inv_add('cosx_esp_mono', 8_8*size(cosx_esp_mono,kind=8))
+if (allocated(cosx_esp_bound_lr)) call mem_inv_add('cosx_esp_bound_lr', 8_8*size(cosx_esp_bound_lr,kind=8))
+if (allocated(cosx_esp_bound_sr)) call mem_inv_add('cosx_esp_bound_sr', 8_8*size(cosx_esp_bound_sr,kind=8))
+if (allocated(cosx_Xblock_lo)) call mem_inv_add('cosx_Xblock_lo', 8_8*size(cosx_Xblock_lo,kind=8))
+if (allocated(cosx_Xblock_md)) call mem_inv_add('cosx_Xblock_md', 8_8*size(cosx_Xblock_md,kind=8))
+if (allocated(cosx_Xblock_hi)) call mem_inv_add('cosx_Xblock_hi', 8_8*size(cosx_Xblock_hi,kind=8))
+if (allocated(cosx_ext_ptr)) call mem_inv_add('cosx_ext_ptr', 8_8*size(cosx_ext_ptr,kind=8))
+if (allocated(cosx_ext_idx)) call mem_inv_add('cosx_ext_idx', 8_8*size(cosx_ext_idx,kind=8))
+if (allocated(cosx_ext_ptr_sym)) call mem_inv_add('cosx_ext_ptr_sym', 8_8*size(cosx_ext_ptr_sym,kind=8))
+if (allocated(cosx_ext_idx_sym)) call mem_inv_add('cosx_ext_idx_sym', 8_8*size(cosx_ext_idx_sym,kind=8))
+if (allocated(cosx_ext_ptr_lr)) call mem_inv_add('cosx_ext_ptr_lr', 8_8*size(cosx_ext_ptr_lr,kind=8))
+if (allocated(cosx_ext_idx_lr)) call mem_inv_add('cosx_ext_idx_lr', 8_8*size(cosx_ext_idx_lr,kind=8))
+if (allocated(cosx_ext_ptr_lr_sym)) call mem_inv_add('cosx_ext_ptr_lr_sym', 8_8*size(cosx_ext_ptr_lr_sym,kind=8))
+if (allocated(cosx_ext_idx_lr_sym)) call mem_inv_add('cosx_ext_idx_lr_sym', 8_8*size(cosx_ext_idx_lr_sym,kind=8))
+if (allocated(cosx_ext_ptr_sr)) call mem_inv_add('cosx_ext_ptr_sr', 8_8*size(cosx_ext_ptr_sr,kind=8))
+if (allocated(cosx_ext_idx_sr)) call mem_inv_add('cosx_ext_idx_sr', 8_8*size(cosx_ext_idx_sr,kind=8))
+if (allocated(cosx_ext_ptr_sr_sym)) call mem_inv_add('cosx_ext_ptr_sr_sym', 8_8*size(cosx_ext_ptr_sr_sym,kind=8))
+if (allocated(cosx_ext_idx_sr_sym)) call mem_inv_add('cosx_ext_idx_sr_sym', 8_8*size(cosx_ext_idx_sr_sym,kind=8))
+if (allocated(cosx_G_hi_a)) call mem_inv_add('cosx_G_hi_a', 8_8*size(cosx_G_hi_a,kind=8))
+if (allocated(cosx_G_hi_b)) call mem_inv_add('cosx_G_hi_b', 8_8*size(cosx_G_hi_b,kind=8))
+if (allocated(cosx_G_hi_a_lr)) call mem_inv_add('cosx_G_hi_a_lr', 8_8*size(cosx_G_hi_a_lr,kind=8))
+if (allocated(cosx_G_hi_b_lr)) call mem_inv_add('cosx_G_hi_b_lr', 8_8*size(cosx_G_hi_b_lr,kind=8))
+if (allocated(df_evec)) call mem_inv_add('df_evec', 8_8*size(df_evec,kind=8))
+if (allocated(df_evalinv)) call mem_inv_add('df_evalinv', 8_8*size(df_evalinv,kind=8))
+call mem_inv_report()
+end subroutine cosx_mem_inventory
+
 end submodule exchange_cosx_k_impl

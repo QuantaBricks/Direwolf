@@ -11,6 +11,7 @@ public :: get_memory_budget_bytes
 public :: get_store_threshold_bytes
 public :: engine_mem_cap_bytes
 public :: get_process_memory_bytes
+public :: mem_mark, mem_inv_add, mem_inv_report
 public :: engine_avail_at_start_bytes
 public :: release_free_memory
 
@@ -19,6 +20,11 @@ integer(8),parameter :: FALLBACK_BYTES = 8_8*1024_8*1024_8*1024_8
 integer(8) :: engine_mem_cap_bytes = 0_8
 
 integer(8) :: engine_avail_at_start_bytes = 0_8
+
+integer,parameter :: MEM_INV_MAX = 256
+character(len=40),save :: mem_inv_name(MEM_INV_MAX) = ''
+integer(8),save :: mem_inv_bytes(MEM_INV_MAX) = 0_8
+integer,save :: mem_inv_n = 0
 
 contains
 
@@ -149,5 +155,57 @@ enddo
 !$omp end parallel
 r = c_malloc_trim(0_c_size_t)
 end subroutine release_free_memory
+
+subroutine mem_mark(label, verbose)
+    implicit none
+    character(len=*),intent(in) :: label
+    integer,intent(in) :: verbose
+    integer(8) :: rss, hwm
+    if (verbose .lt. 2) return
+    call get_process_memory_bytes(rss, hwm)
+    print '(A,A,A,F7.2,A,F7.2,A)', " [mem] ", label, ": RSS ", real(rss,8)/1024.0d0**3, " GB, peak ", real(hwm,8)/1024.0d0**3, " GB"
+    call flush(6)
+end subroutine mem_mark
+
+subroutine mem_inv_add(name, bytes)
+    implicit none
+    character(len=*),intent(in) :: name
+    integer(8),intent(in) :: bytes
+    if (mem_inv_n .ge. MEM_INV_MAX) return
+    mem_inv_n = mem_inv_n + 1
+    mem_inv_name(mem_inv_n) = name
+    mem_inv_bytes(mem_inv_n) = bytes
+end subroutine mem_inv_add
+
+subroutine mem_inv_report()
+    implicit none
+    integer :: i, j, jmax
+    integer(8) :: tot
+    logical :: done(MEM_INV_MAX)
+    done = .false.
+    tot = 0_8
+    do i = 1,mem_inv_n
+       tot = tot + mem_inv_bytes(i)
+    enddo
+    do i = 1,mem_inv_n
+       jmax = 0
+       do j = 1,mem_inv_n
+          if (.not. done(j)) then
+             if (jmax .eq. 0) then
+                jmax = j
+             else if (mem_inv_bytes(j) .gt. mem_inv_bytes(jmax)) then
+                jmax = j
+             endif
+          endif
+       enddo
+       if (jmax .eq. 0) exit
+       done(jmax) = .true.
+       if (mem_inv_bytes(jmax) .ge. 20000000_8) &
+          print '(A,A,F8.3,A)', " [mem]   ", mem_inv_name(jmax), real(mem_inv_bytes(jmax),8)/1024.0d0**3, " GB"
+    enddo
+    print '(A,F8.3,A)', " [mem]   total of the list: ", real(tot,8)/1024.0d0**3, " GB"
+    call flush(6)
+    mem_inv_n = 0
+end subroutine mem_inv_report
 
 end module mod_meminfo

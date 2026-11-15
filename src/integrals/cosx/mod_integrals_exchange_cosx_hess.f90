@@ -74,6 +74,7 @@ logical :: lrfit
 real(8),allocatable :: Zt(:,:,:,:)
 integer(16),allocatable :: Ztq(:,:,:,:)
 real(8) :: hs_rsomega
+real(8) :: hs_lrc = 0.0d0
 
 interface
 module subroutine hmem(tag)
@@ -129,11 +130,12 @@ real(8),intent(in) :: xb(n,nb), x1b(n,3,nb), wv(nb), qv(nb,n)
 real(8),intent(out) :: Lpt(nb)
 end subroutine kx_free_leg_max
 
-module subroutine kx_proj_leg(nb, bstart, is, xb, wv, x1b, nloc, loc, Gl, KCa, XWl, tk)
+module subroutine kx_proj_leg(nb, bstart, is, xb, wv, x1b, nloc, loc, Gl, KCa, XWl, tk, dev_main)
 implicit none
 integer,intent(in) :: nb, bstart, is, nloc, loc(natoms)
 real(8),intent(in) :: xb(n,nb), wv(nb), x1b(n,3,nb), Gl(nb,n), KCa(nb,N3,nop)
 real(8),intent(inout) :: XWl(n,nop,*), tk(6)
+logical,intent(in) :: dev_main
 end subroutine kx_proj_leg
 
 module subroutine hess_post_sub(ng, bst, ib, is, nloc, loc, xs, x1s, x2s, ws, avs, Gvs, Gtvs, KCs_, MCs_, &
@@ -207,7 +209,7 @@ end interface
 
 contains
 
-module subroutine cosx_hess_exchange(nConts, natoms, Da, Db, RSomega, d2Ea, d2Eb, Kxa, Kxb, Cocca, Coccb)
+module subroutine cosx_hess_exchange(nConts, natoms, Da, Db, RSomega, d2Ea, d2Eb, Kxa, Kxb, Cocca, Coccb, lrcoef)
 use omp_lib, only: omp_get_thread_num, omp_get_num_threads, omp_get_wtime, omp_get_max_threads, &
                    omp_lock_kind, omp_init_lock, omp_set_lock, omp_unset_lock, omp_destroy_lock
 use MOL_info, only: engine_verbose
@@ -219,7 +221,10 @@ real(8),intent(in) :: RSomega
 real(8),intent(out) :: d2Ea(3,natoms,3,natoms), d2Eb(3,natoms,3,natoms)
 real(8),intent(out),optional :: Kxa(nConts,nConts,3,natoms), Kxb(nConts,nConts,3,natoms)
 real(8),intent(in),optional :: Cocca(:,:), Coccb(:,:)
+real(8),intent(in),optional :: lrcoef
 hs_rsomega = RSomega
+hs_lrc = 0.0d0
+if (present(lrcoef)) hs_lrc = lrcoef
 if (allocated(Dsp)) deallocate(Dsp)
 if (allocated(DPt)) deallocate(DPt)
 if (allocated(dwdr)) deallocate(dwdr)

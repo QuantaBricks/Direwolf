@@ -105,6 +105,10 @@ character(len=*),intent(in) :: auxname
 integer :: i,k,jsh,shidx,nGauss,offpoint,nEnvOld,ios,L,numShellAtom
 character(len=30) :: base_temp, basis_char
 character(len=200) :: bpath
+character(len=256) :: fline
+character(len=128),allocatable :: flines(:)
+integer,allocatable :: elem_line(:)
+integer :: nfl, lp
 real(8) :: expo, coeff
 real(8) :: coeffs(50)
 real(8),external :: CINTgto_norm
@@ -114,21 +118,40 @@ write(base_temp,"(I2.2,A1,A)") atoms(1)%charge, "-", auxname
 bpath = basis_file_for_label(base_temp)
 if (len_trim(bpath) == 0) stop "DF aux basis label not found in data/bases"
 open(unit=202, file=trim(bpath))
+nfl = 0
+do
+   read(202,'(A)',iostat=ios) fline
+   if (ios /= 0) exit
+   nfl = nfl + 1
+enddo
+allocate(flines(nfl))
+rewind(202)
+do k = 1,nfl
+   read(202,'(A)') flines(k)
+enddo
+close(202)
+allocate(elem_line(0:200))
+elem_line = 0
 
 allocate(nShellAtom(nAtoms))
 nBasesAux = 0
 nContsAux = 0
 do i = 1,nAtoms
    write(base_temp,"(I2.2,A1,A)") atoms(i)%charge, "-", auxname
-   rewind(202)
-   do
-      read(202,*,iostat=ios) basis_char
-      if (ios .ne. 0) stop "DF aux basis label not found in data/bases"
-      if (trim(basis_char) .eq. trim(base_temp)) exit
-   enddo
+   if (elem_line(atoms(i)%charge) == 0) then
+      do k = 1,nfl
+         if (trim(adjustl(flines(k))) .eq. trim(base_temp)) then
+            elem_line(atoms(i)%charge) = k
+            exit
+         endif
+      enddo
+      if (elem_line(atoms(i)%charge) == 0) stop "DF aux basis label not found in data/bases"
+   endif
+   lp = elem_line(atoms(i)%charge) + 1
    numShellAtom = 0
    do
-      read(202,*) basis_char, basis_char
+      read(flines(lp),*) basis_char, basis_char
+      lp = lp + 1
       if (trim(basis_char) .eq. "END") exit
       select case(trim(basis_char))
       case("s"); L = 0
@@ -151,7 +174,6 @@ do i = 1,nAtoms
    enddo
    nShellAtom(i) = numShellAtom
 enddo
-rewind(202)
 
 allocate(basDF(8,nBases+nBasesAux))
 nEnvOld = size(env)
@@ -165,14 +187,19 @@ offpoint = nEnvOld
 shidx = nBases
 do i = 1,nAtoms
    write(base_temp,"(I2.2,A1,A)") atoms(i)%charge, "-", auxname
-   rewind(202)
-   do
-      read(202,*,iostat=ios) basis_char
-      if (ios .ne. 0) stop "DF aux basis label not found in data/bases"
-      if (trim(basis_char) .eq. trim(base_temp)) exit
-   enddo
+   if (elem_line(atoms(i)%charge) == 0) then
+      do k = 1,nfl
+         if (trim(adjustl(flines(k))) .eq. trim(base_temp)) then
+            elem_line(atoms(i)%charge) = k
+            exit
+         endif
+      enddo
+      if (elem_line(atoms(i)%charge) == 0) stop "DF aux basis label not found in data/bases"
+   endif
+   lp = elem_line(atoms(i)%charge) + 1
    do jsh = 1,nShellAtom(i)
-      read(202,*) nGauss, basis_char
+      read(flines(lp),*) nGauss, basis_char
+      lp = lp + 1
       select case(trim(basis_char))
       case("s"); L = 0
       case("p"); L = 1
@@ -189,7 +216,8 @@ do i = 1,nAtoms
       basDF(4,shidx) = 1
       basDF(6,shidx) = offpoint
       do k = 1,nGauss
-         read(202,*) expo, coeffs(k)
+         read(flines(lp),*) expo, coeffs(k)
+         lp = lp + 1
          envDF(offpoint+k) = expo
       enddo
       offpoint = offpoint + nGauss
@@ -201,8 +229,7 @@ do i = 1,nAtoms
    enddo
 enddo
 nBasesAux = shidx - nBases
-close(202)
-deallocate(nShellAtom)
+deallocate(nShellAtom, flines, elem_line)
 
 allocate(NorVECAux(nContsAux))
 NorVECAux = 0.0d0
@@ -241,6 +268,7 @@ real(8) :: maxdiag
 real(8),allocatable :: metric(:,:), eval(:), work(:)
 integer,allocatable :: iwork(:)
 integer :: lwork, liwork, i
+logical :: df_metric_force_eig
 integer,allocatable :: aux_offset(:)
 integer,allocatable :: pair_slot_2d(:,:)
 real(8) :: val3c
@@ -257,6 +285,7 @@ if (engine_verbose .ge. 2) then
            "  nBasesAux="//trim(itoa(nBasesAux))//"  nContsAux="//trim(itoa(nContsAux))// &
            "  RSS="//trim(fmt_gb(real(diag_rss,8)/1024**3))//"GB"
 endif
+call prof_start("df_metric_2c")
 allocate(metric(nContsAux,nContsAux))
 allocate(aux_shell_bound(nBasesAux))
 metric = 0.0d0
@@ -296,6 +325,7 @@ do ish = nBases,nBases+nBasesAux-1
 enddo
 !$omp end parallel do
 deallocate(aux_offset)
+call prof_stop("df_metric_2c")
 
 maxdiag = maxval(aux_shell_bound)
 
@@ -338,9 +368,7 @@ block
    df_avail_bytes = engine_avail_at_start_bytes
    df_direct_mode = .true.
    if (engine_use_df_k) df_direct_mode = (df_need_bytes > df_avail_bytes)
-   if (.not. need_k_est .and. RS_omega .le. 0.0d0) &
-      df_direct_mode = (df_need_bytes > df_avail_bytes)
-   if (hessian_run) df_direct_mode = (df_need_bytes > df_avail_bytes)
+   if (hessian_run .and. engine_use_df_k) df_direct_mode = (df_need_bytes > df_avail_bytes)
    force_direct_env = ""
    call get_environment_variable("ENGINE_FORCE_DF_DIRECT", force_direct_env)
    if (trim(force_direct_env) .eq. "1") df_direct_mode = .true.
@@ -356,7 +384,12 @@ block
       print '(A)', "  Build mode: "//trim(merge("DIRECT (in-core)       ","STORE (density fitting)",df_direct_mode))
 end block
 if (df_direct_mode) then
+   mdj_stale = .true.
+   df_triple_defer = .true.
+   call prof_start("df_triple_list")
    call build_df_triple_list()
+   call prof_stop("df_triple_list")
+   df_triple_defer = .false.
 endif
 if (.not. df_direct_mode) then
 block
@@ -465,9 +498,102 @@ deallocate(pair_slot_2d)
 call prof_stop("df_compact_fill")
 endif
 
+df_metric_chol = .false.
+block
+   character(len=8) :: eig_env
+   call get_environment_variable("ENGINE_DF_METRIC_EIG", eig_env)
+   df_metric_force_eig = (trim(eig_env) .eq. "1")
+end block
+if (.not. engine_use_df_k .and. .not. df_metric_force_eig) then
+   block
+      real(8),allocatable :: Lc(:,:), x(:), y(:)
+      real(8) :: lmax, lmin, rcond, lold
+      real(8),external :: dnrm2, ddot
+      integer :: c1, c2, it
+      logical :: est_ok
+      real(8),parameter :: DF_CHOL_MARGIN = 1.1d0, EST_TOL = 1.0d-4
+      integer,parameter :: EST_MAXIT = 100
+      call prof_start("df_metric_chol")
+      allocate(Lc(nContsAux,nContsAux), x(nContsAux), y(nContsAux))
+      Lc = metric
+      call openblas_set_num_threads(omp_get_max_threads())
+      call dpotrf('L', nContsAux, Lc, nContsAux, info)
+      rcond = 0.0d0
+      est_ok = .false.
+      lmin = 0.0d0
+      lmax = 1.0d0
+      if (info .eq. 0) then
+         do c1 = 1,nContsAux
+            x(c1) = 1.0d0 + 0.37d0*mod(c1, 7)
+         enddo
+         x = x/dnrm2(nContsAux, x, 1)
+         lold = 0.0d0
+         est_ok = .false.
+         do it = 1,EST_MAXIT
+            call dsymv('L', nContsAux, 1.0d0, metric, nContsAux, x, 1, 0.0d0, y, 1)
+            lmax = ddot(nContsAux, x, 1, y, 1)
+            x = y/dnrm2(nContsAux, y, 1)
+            if (it .gt. 2 .and. abs(lmax - lold) .le. EST_TOL*lmax) then
+               est_ok = .true.
+               exit
+            endif
+            lold = lmax
+         enddo
+         if (est_ok) then
+            do c1 = 1,nContsAux
+               x(c1) = 1.0d0 + 0.37d0*mod(c1, 5)
+            enddo
+            x = x/dnrm2(nContsAux, x, 1)
+            lold = 0.0d0
+            est_ok = .false.
+            do it = 1,EST_MAXIT
+               y = x
+               call dpotrs('L', nContsAux, 1, Lc, nContsAux, y, nContsAux, info)
+               lmin = 1.0d0/ddot(nContsAux, x, 1, y, 1)
+               x = y/dnrm2(nContsAux, y, 1)
+               if (it .gt. 2 .and. abs(lmin - lold) .le. EST_TOL*lmin) then
+                  est_ok = .true.
+                  exit
+               endif
+               lold = lmin
+            enddo
+         endif
+         rcond = lmin/lmax
+      endif
+      if (info .eq. 0 .and. est_ok .and. rcond .gt. DF_CHOL_MARGIN*DF_EVAL_FLOOR) then
+         call dtrtri('L', 'N', nContsAux, Lc, nContsAux, info)
+         if (info .eq. 0) then
+            allocate(df_evec(nContsAux,nContsAux), df_evalinv(nContsAux))
+            !$omp parallel do private(c1, c2)
+            do c2 = 1,nContsAux
+               do c1 = 1,nContsAux
+                  if (c1 .le. c2) then
+                     df_evec(c1,c2) = Lc(c2,c1)
+                  else
+                     df_evec(c1,c2) = 0.0d0
+                  endif
+               enddo
+            enddo
+            !$omp end parallel do
+            df_evalinv = 1.0d0
+            df_metric_chol = .true.
+         endif
+      endif
+      call openblas_set_num_threads(1)
+      deallocate(Lc, x, y)
+      call prof_stop("df_metric_chol")
+      if (engine_verbose .ge. 2) print '(A,L2,A,ES10.2,A,L2)', '  DF metric: Cholesky', df_metric_chol, '  lambda_min/max', rcond, &
+         '  estimates converged', est_ok
+      if (.not. df_metric_chol .and. nContsAux .gt. 6000) &
+         print '(A,I0,A,ES9.2,A)', ' [DF] metric of ', nContsAux, ' functions: Cholesky not usable (lambda_min/max ', rcond, &
+         '), full eigendecomposition on the CPU: minutes'
+   end block
+endif
+if (.not. df_metric_chol) then
 allocate(eval(nContsAux))
 allocate(work(1))
 allocate(iwork(1))
+call prof_start("df_metric_eig")
 call dsyevd('V', 'L', nContsAux, metric, nContsAux, eval, work, -1, iwork, -1, info)
 lwork = int(work(1))
 liwork = iwork(1)
@@ -485,6 +611,7 @@ endif
 allocate(df_evec(nContsAux,nContsAux))
 allocate(df_evalinv(nContsAux))
 df_evec = metric
+call prof_stop("df_metric_eig")
 do i = 1,nContsAux
    if (eval(i) .gt. DF_EVAL_FLOOR*eval(nContsAux)) then
       df_evalinv(i) = 1.0d0/eval(i)
@@ -492,7 +619,10 @@ do i = 1,nContsAux
       df_evalinv(i) = 0.0d0
    endif
 enddo
+if (engine_verbose .ge. 2) print '(A,ES10.2,A,ES10.2,A,I6)', '  DF metric eigenvalues: min', eval(1), '  max', eval(nContsAux), &
+   '  below the floor', count(eval .le. DF_EVAL_FLOOR*eval(nContsAux))
 deallocate(eval)
+endif
 deallocate(metric)
 end subroutine build_df_integrals
 
@@ -650,6 +780,7 @@ implicit none
 real(8),allocatable :: Vscaled(:,:)
 integer :: i
 
+if (df_metric_chol) error stop 'build_df_metric_invhalf: Cholesky metric, M^-1/2 needs the eigenvectors'
 allocate(Vscaled(nContsAux,nContsAux))
 do i = 1,nContsAux
    Vscaled(:,i) = df_evec(:,i)*sqrt(df_evalinv(i))
@@ -699,15 +830,78 @@ df_store_released = .true.
 end subroutine df_store_release
 
 module subroutine df_store_restore()
+implicit none
+if (.not. df_store_released) return
+allocate(dfB_compact(df_total_pairs,nContsAux))
+call df_fill_store_tensor(dfB_compact)
+df_direct_mode = .false.
+df_store_released = .false.
+end subroutine df_store_restore
+
+module subroutine df_ensure_pair_tables()
+use MOL_info, only: nConts
+implicit none
+integer,allocatable :: fn_shell(:), pslot(:,:)
+integer :: m, n, ish, ish3, jsh3, slot, offi, p, di
+real(8) :: maxdiag
+if (allocated(df_pair_row)) return
+maxdiag = maxval(aux_shell_bound)
+allocate(fn_shell(nConts))
+offi = 0
+do ish = 0,nBases-1
+   di = cgto_engine(ish, basDF)
+   do p = 1,di
+      fn_shell(offi+p) = ish
+   enddo
+   offi = offi + di
+enddo
+if (allocated(df_row_start)) deallocate(df_row_start, df_row_count)
+allocate(df_row_start(nConts), df_row_count(nConts))
+slot = 0
+do m = 1,nConts
+   ish3 = fn_shell(m)
+   df_row_start(m) = slot+1
+   do n = 1,nConts
+      jsh3 = fn_shell(n)
+      if (schwarz_bound(ish3,jsh3)*maxdiag .ge. SCHWARZ_CUTOFF) slot = slot+1
+   enddo
+   df_row_count(m) = slot - df_row_start(m) + 1
+enddo
+df_total_pairs = slot
+df_max_row_count = maxval(df_row_count)
+allocate(df_pair_row(df_total_pairs), df_pair_col(df_total_pairs), pslot(nConts,nConts))
+pslot = 0
+slot = 0
+do m = 1,nConts
+   ish3 = fn_shell(m)
+   do n = 1,nConts
+      jsh3 = fn_shell(n)
+      if (schwarz_bound(ish3,jsh3)*maxdiag .ge. SCHWARZ_CUTOFF) then
+         slot = slot+1
+         df_pair_row(slot) = m
+         df_pair_col(slot) = n
+         pslot(m,n) = slot
+      endif
+   enddo
+enddo
+if (allocated(df_pair_mirror)) deallocate(df_pair_mirror)
+allocate(df_pair_mirror(df_total_pairs))
+do slot = 1,df_total_pairs
+   df_pair_mirror(slot) = pslot(df_pair_col(slot), df_pair_row(slot))
+enddo
+deallocate(fn_shell, pslot)
+end subroutine df_ensure_pair_tables
+
+module subroutine df_fill_store_tensor(B)
 use MOL_info
 use mod_profile, only: prof_start, prof_stop
 implicit none
+real(8),intent(out) :: B(df_total_pairs,nContsAux)
 integer :: ish,jsh,ksh,p,q,r,di,dj,dk,offP,offi,offj,slot_pq,slot_qp,slot
 integer :: shls(4)
 real(8),allocatable :: buf3c(:,:,:)
 integer,allocatable :: aux_offset(:), pair_slot_2d(:,:)
 real(8) :: val3c, maxdiag
-if (.not. df_store_released) return
 call prof_start("df_compact_fill")
 maxdiag = maxval(aux_shell_bound)
 allocate(pair_slot_2d(nConts,nConts))
@@ -715,10 +909,9 @@ pair_slot_2d = 0
 do slot = 1,df_total_pairs
    pair_slot_2d(df_pair_row(slot), df_pair_col(slot)) = slot
 enddo
-allocate(dfB_compact(df_total_pairs,nContsAux))
 !$omp parallel do private(p)
 do p = 1,nContsAux
-   dfB_compact(:,p) = 0.0d0
+   B(:,p) = 0.0d0
 enddo
 !$omp end parallel do
 allocate(aux_offset(0:nBases-1))
@@ -753,10 +946,10 @@ do ish = 0,nBases-1
                do p = 1,di
                   val3c = buf3c(p,q,r) * NorVEC(offi+p)*NorVEC(offj+q)*NorVECAux(offP+r)
                   slot_pq = pair_slot_2d(offi+p, offj+q)
-                  dfB_compact(slot_pq, offP+r) = val3c
+                  B(slot_pq, offP+r) = val3c
                   if (offi+p .ne. offj+q) then
                      slot_qp = pair_slot_2d(offj+q, offi+p)
-                     dfB_compact(slot_qp, offP+r) = val3c
+                     B(slot_qp, offP+r) = val3c
                   endif
                enddo
             enddo
@@ -768,9 +961,7 @@ do ish = 0,nBases-1
 enddo
 !$omp end parallel do
 deallocate(aux_offset, pair_slot_2d)
-df_direct_mode = .false.
-df_store_released = .false.
 call prof_stop("df_compact_fill")
-end subroutine df_store_restore
+end subroutine df_fill_store_tensor
 
 end submodule df_setup_impl

@@ -4,6 +4,7 @@
 ! Harmonic frequencies from a Cartesian Hessian: mass-weight, project out
 
 module mod_hessian_freq
+use mod_engine_report, only: report_freq, report_thermo
 implicit none
 private
 public :: hessian_write_full, hessian_frequencies, atomic_mass, hess_classical, &
@@ -88,6 +89,7 @@ deallocate(H)
 end subroutine hessian_write_full
 
 subroutine hessian_frequencies(natoms, znum, coor_bohr, d2E, freq_cm, nfreq, disp, nzero)
+use MOL_info, only: nPointCharges
 implicit none
 integer,intent(in) :: natoms, znum(natoms)
 real(8),intent(in) :: coor_bohr(3,natoms)
@@ -169,6 +171,11 @@ do k = 1,6
       nproj = nproj + 1
    endif
 enddo
+
+if (nPointCharges > 0) then
+   nproj = 0
+   write(freq_unit,'(A)') ' Note: external point charges - translations and rotations are not projected out (3N modes)'
+endif
 
 allocate(P(n,n))
 P = 0.0d0
@@ -271,6 +278,21 @@ do k0 = nskip+1,n,3
    enddo
 enddo
 write(freq_unit,'(A)') ' [NORMALMODESEND]'
+block
+   real(8), allocatable :: fcv(:), dsp(:,:,:)
+   integer :: nm
+   nm = n - nskip
+   if (nm > 0) then
+      allocate(fcv(nm), dsp(3,natoms,nm))
+      do k = nskip+1, n
+         fcv(k-nskip) = fc(k)
+         do ia = 1, natoms
+            dsp(:,ia,k-nskip) = disp(3*(ia-1)+1:3*(ia-1)+3,k)*sqrt(redmass(k))
+         enddo
+      enddo
+      call report_freq(freq_cm(nskip+1:n), inten(nskip+1:n), redmass(nskip+1:n), fcv, dsp)
+   endif
+end block
 contains
 real(8) function fc(k)
 integer,intent(in) :: k
@@ -496,8 +518,8 @@ real(8),parameter :: kcal = 4184d0, cm2K = 1.438776877d0, pi = 3.14159265358979d
 real(8) :: T, P, mtot, com(3), r(3,natoms), Iner(3,3), mom(3), work(64), mkg
 real(8) :: qt, St, Et, Sr, Er, Sv, Ev, Cv, zpe, Se, th, x, qr, thr(3), Cvv, Crot
 real(8) :: srrho, nuhz, mu, mup, sfree, wq
-real(8) :: Etot, Htot, Gtot, Stot, e0
-integer :: i, j, info, sigma, nv
+real(8) :: Etot, Htot, Gtot, Stot, e0, fskip
+integer :: i, j, info, sigma, nv, nskip
 logical :: linear, atom
 
 T = freq_temp; P = freq_pres
@@ -540,9 +562,13 @@ if (.not. atom) then
       Sr = Rg*(log(qr) + 1.5d0); Er = 1.5d0*Rg*T; Crot = 1.5d0*Rg
    endif
 endif
-Sv = 0d0; Ev = 0d0; zpe = 0d0; nv = 0; Cvv = 0d0
+Sv = 0d0; Ev = 0d0; zpe = 0d0; nv = 0; Cvv = 0d0; nskip = 0; fskip = 0d0
 do i = nzero+1, 3*natoms
-   if (freq_cm(i) <= 1d0) cycle
+   if (freq_cm(i) <= 1d0) then
+      nskip = nskip + 1
+      fskip = min(fskip, freq_cm(i))
+      cycle
+   endif
    nv = nv + 1
    th = cm2K*freq_cm(i); x = th/T
    zpe = zpe + 0.5d0*Rg*th
@@ -565,6 +591,13 @@ Gtot = Htot - T*Stot
 e0 = freq_energy
 write(freq_unit,'(A)') ' [THERMO]'
 write(freq_unit,'(A,F9.2,A,F10.1,A)') ' Ideal gas, rigid rotor, harmonic oscillator;  T =', T, ' K,  P =', P, ' Pa'
+if (abs(P - 101325d0) < 1d-6*101325d0) then
+   write(freq_unit,'(A)') ' Standard state: 1 atm (gas phase)'
+else
+   write(freq_unit,'(A,F10.4,A,F8.4,A)') ' Standard state: ', P/(Rg*T)/1000d0, ' mol/L (', P/101325d0, ' atm)'
+endif
+if (nskip > 0) write(freq_unit,'(A,I0,A,F10.2,A)') ' Left out of the vibrational sums: ', nskip, &
+   ' mode(s) at or below 1 cm-1 (imaginary ones included), lowest ', fskip, ' cm-1'
 write(freq_unit,'(A,I3,A,I3)') ' Rotational symmetry number =', sigma, '   multiplicity =', mult
 write(freq_unit,'(A,F14.4,A)') ' Total mass            =', mtot, ' amu'
 write(freq_unit,'(A,F14.6,A,F10.3,A)') ' Zero-point correction =', zpe/NA/Eh, ' Eh  (', zpe/kcal, ' kcal/mol)'
@@ -584,6 +617,8 @@ if (e0 /= 0d0) then
    write(freq_unit,'(A,F18.8)') ' Sum of electronic and thermal free energies =', e0 + Gtot/NA/Eh
 endif
 write(freq_unit,'(A)') ' [THERMOEND]'
+call report_thermo(T, P, mult, sigma, mtot, zpe/NA/Eh, Etot/NA/Eh, Htot/NA/Eh, Gtot/NA/Eh, Stot/4.184d0, &
+                 Cv/4.184d0, Se/4.184d0, St/4.184d0, Sr/4.184d0, Sv/4.184d0, e0)
 end subroutine print_thermo
 
 end module mod_hessian_freq

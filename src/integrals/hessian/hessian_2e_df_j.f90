@@ -4,11 +4,15 @@
 ! RI-J (density-fitted Coulomb) direct ("Pulay") second-derivative Hessian
 
 submodule (mod_integrals) hessian_df_j_impl
+use MOL_info, only: engine_verbose
 implicit none
+real(8),allocatable,save :: dfjc_P(:,:), dfjc_bvec(:), dfjc_bx(:,:,:), dfjc_bc(:,:,:), dfjc_xyz(:,:)
+logical,save :: dfjc_valid = .false.
 contains
 
 module subroutine integrals_hessian_2e_df_j(nConts, natoms, Ptot, d2E)
 use mod_profile, only: prof_start, prof_stop
+use MOL_info, only: atoms
 use omp_lib, only: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
 implicit none
 real(8) :: tq0, tq(5), tb0
@@ -35,6 +39,9 @@ real(8),allocatable :: buf(:), coef(:,:,:), dmax_shell(:,:)
 real(8) :: Ppq, ns, s3(3), s9(9), crow, fac, v3
 real(8) :: M3(3,3), M3t(3,3), MII(3,3), MKK(3,3), MIK(3,3)
 logical :: do_direct, do_cross, do_metric, do_3c
+logical :: md_ok, md_cmp, md3_ok, run_lc
+character(len=4) :: mdenv
+real(8),allocatable :: bvec_md(:), bx_md(:,:,:), d2E_md(:,:,:,:)
 character(32) :: envx
 integer :: stx
 integer(8) :: opt_base, opt_ip1, opt_ip2, opt_ipip1, opt_ipip2, opt_ipvip1, opt_ip1ip2
@@ -79,8 +86,7 @@ allocate(bc_t(natoms,3,nContsAux,nth), d2E_t(3,natoms,3,natoms,nth))
 
 bvec = 0.0d0; bx = 0.0d0; bc = 0.0d0; d2E = 0.0d0
 
-call get_environment_variable("ENGINE_HESS2E_TIMING", tq_env)
-tq_on = (trim(tq_env) .eq. "1")
+tq_on = (engine_verbose .ge. 2)
 tq = 0.0d0
 tq0 = omp_get_wtime()
 call threec2e_optimizer_engine(opt_base, atm, size(atm,2), basDF, nshb, envDF)
@@ -121,6 +127,15 @@ do kk0 = 1,nunits
    tload(tmin) = tload(tmin) + ucost(u)
 enddo
 deallocate(ui, uj, ucost, uord)
+call get_environment_variable("ENGINE_DFJ_MD", mdenv)
+call df_mdj_hess_b1(nConts, natoms, Ptot, own, nth, bvec, bx, md_ok)
+md_cmp = md_ok .and. (trim(mdenv) == "2")
+run_lc = (.not. md_ok) .or. md_cmp
+if (md_cmp) then
+   allocate(bvec_md(nContsAux), bx_md(natoms,3,nContsAux))
+   bvec_md = bvec ; bx_md = bx ; bvec = 0.0d0 ; bx = 0.0d0
+endif
+if (run_lc) then
 !$omp parallel default(shared) num_threads(nth) &
 !$omp&   private(ish,jsh,ksh,di,dj,dk,p,q,r,a,atomI,atomJ,atomK,offi,offj,offP, &
 !$omp&           shls,shlsw,buf,Ppq,ns,tid,fac,v3)
@@ -186,6 +201,12 @@ do tid = 1,nth
    bvec = bvec + bvec_t(:,tid)
    bx = bx + bx_t(:,:,:,tid)
 enddo
+endif
+if (md_cmp) then
+   print '(A,2ES12.3,A,2ES12.3)', '[dfj hess pass1] max|db|, max|b| ', maxval(abs(bvec_md - bvec)), maxval(abs(bvec)), &
+         '  max|dbx|, max|bx| ', maxval(abs(bx_md - bx)), maxval(abs(bx))
+   deallocate(bvec_md, bx_md)
+endif
 call cintdel_optimizer(opt_base)
 call cintdel_optimizer(opt_ip1)
 call cintdel_optimizer(opt_ip2)
@@ -276,6 +297,13 @@ call cintdel_optimizer(opt_ip1)
 call cintdel_optimizer(opt_ip2)
 call cintdel_optimizer(opt_ipip1)
 call cintdel_optimizer(opt_ip1ip2)
+if (allocated(dfjc_P)) deallocate(dfjc_P, dfjc_bvec, dfjc_bx, dfjc_bc, dfjc_xyz)
+allocate(dfjc_P(nConts,nConts), dfjc_bvec(nContsAux), dfjc_bx(natoms,3,nContsAux), dfjc_bc(natoms,3,nContsAux))
+allocate(dfjc_xyz(3,natoms))
+do ish = 1,natoms
+   dfjc_xyz(:,ish) = atoms(ish)%coor
+enddo
+dfjc_P = Ptot ; dfjc_bvec = bvec ; dfjc_bx = bx ; dfjc_bc = bc ; dfjc_valid = .true.
 
 do a = 1,3
    do ish = 1,natoms
@@ -297,6 +325,16 @@ call threec2e_ip1ip2_optimizer_engine(opt_ip1ip2, atm, size(atm,2), basDF, nshb,
 call threec2e_ipip2_optimizer_engine(opt_ipip2, atm, size(atm,2), basDF, nshb, envDF)
 d2E_t = 0.0d0
 allocate(tbusy(size(d2E_t,5))) ; tbusy = 0.0d0
+md3_ok = .false.
+if (do_3c) call df_mdj_hess_pass3(nConts, natoms, Ptot, cvec, own, nth, d2E_t, md3_ok)
+md_cmp = md3_ok .and. (trim(mdenv) == "2")
+run_lc = (.not. md3_ok) .or. md_cmp
+if (md_cmp) then
+   allocate(d2E_md(3,natoms,3,natoms))
+   d2E_md = sum(d2E_t, dim=5)
+   d2E_t = 0.0d0
+endif
+if (run_lc) then
 !$omp parallel default(shared) num_threads(size(d2E_t,5)) &
 !$omp&   private(ish,jsh,ksh,di,dj,dk,p,q,r,atomI,atomJ,atomK,offi,offj,offP, &
 !$omp&           shls,shlsw,buf,coef,s9,M3,M3t,MII,MKK,MIK,tid,fac,tb0)
@@ -354,6 +392,11 @@ do ish = 0,nBases-1
 enddo
 tbusy(tid) = omp_get_wtime() - tb0
 !$omp end parallel
+endif
+if (md_cmp) then
+   print '(A,2ES12.3)', '[dfj hess pass3] max|dd2E|, max|d2E| ', maxval(abs(d2E_md - sum(d2E_t, dim=5))), maxval(abs(d2E_md))
+   deallocate(d2E_md)
+endif
 deallocate(own, tload)
 if (tq_on) print '(A,3F8.3)', ' HESS2EDFJ pass3 thread busy min,mean,max:', minval(tbusy), sum(tbusy)/size(tbusy), maxval(tbusy)
 deallocate(tbusy)
@@ -422,6 +465,7 @@ end subroutine integrals_hessian_2e_df_j
 
 module subroutine integrals_df_j_fock_deriv(nConts, natoms, Ptot, Jx)
 use mod_profile, only: prof_start, prof_stop
+use MOL_info, only: atoms
 use omp_lib, only: omp_get_max_threads, omp_get_thread_num, omp_get_wtime, omp_get_num_threads
 implicit none
 integer,intent(in) :: nConts, natoms
@@ -442,6 +486,10 @@ integer,allocatable :: own(:,:), uord(:), ui(:), uj(:)
 real(8),allocatable :: ucost(:), tload(:)
 integer :: nunits, u, tmin, kk0
 real(8) :: ck
+logical :: use_cache, md_ok
+real(8),allocatable :: Hmd(:), SAm(:), SBm(:), SKm(:)
+integer,allocatable :: Klist(:)
+integer :: nKm, kk, nrm
 
 call prof_start("hess_df_j_fock")
 tj0 = omp_get_wtime()
@@ -470,6 +518,19 @@ call compute_shell_density_bound(nConts, Ptot, dmax_shell)
 nth = omp_get_max_threads()
 allocate(bvec_t(nContsAux,nth), bx_t(natoms,3,nContsAux,nth), bc_t(natoms,3,nContsAux,nth))
 
+use_cache = dfjc_valid
+if (use_cache) use_cache = (size(dfjc_P,1) == nConts .and. size(dfjc_bx,1) == natoms)
+if (use_cache) use_cache = all(dfjc_P == Ptot)
+if (use_cache) then
+   do ish = 1,natoms
+      if (any(dfjc_xyz(:,ish) /= atoms(ish)%coor)) use_cache = .false.
+   enddo
+endif
+if (use_cache) then
+   bvec = dfjc_bvec ; bx = dfjc_bx ; bc = dfjc_bc
+   call df_metric_inverse(df_evec, df_evalinv, nContsAux, bvec, cvec)
+endif
+if (.not. use_cache) then
 call threec2e_optimizer_engine(opt_base, atm, size(atm,2), basDF, nshb, envDF)
 call threec2e_ip1_optimizer_engine(opt_ip1, atm, size(atm,2), basDF, nshb, envDF)
 call threec2e_ip2_optimizer_engine(opt_ip2, atm, size(atm,2), basDF, nshb, envDF)
@@ -566,8 +627,10 @@ do tid = 1,nth
    bx = bx + bx_t(:,:,:,tid)
 enddo
 call df_metric_inverse(df_evec, df_evalinv, nContsAux, bvec, cvec)
+endif
 tj(1) = omp_get_wtime()-tj0 ; tj0 = omp_get_wtime()
 
+if (.not. use_cache) then
 call cintdel_optimizer(opt_ip1)
 call cintdel_optimizer(opt_ip2)
 call twoc2e_ip1_optimizer_engine(opt_ip1, atm, size(atm,2), basDF, nshb, envDF)
@@ -611,6 +674,8 @@ enddo
 call cintdel_optimizer(opt_ip1)
 call cintdel_optimizer(opt_ip2)
 deallocate(bvec_t, bx_t, bc_t)
+endif
+if (use_cache) deallocate(bvec_t, bx_t, bc_t)
 
 allocate(uT(N3,nContsAux), wtmp(nContsAux))
 do atomI = 1,natoms
@@ -632,13 +697,16 @@ do ksh = nBases,nshb-1
    maxda = max(maxda, cgto_engine(ksh, basDF))
 enddo
 Jx = 0.0d0
+if (use_cache) call threec2e_optimizer_engine(opt_base, atm, size(atm,2), basDF, nshb, envDF)
+call df_mdj_jx_prepare(cvec, Hmd, md_ok)
 call threec2e_ip1_optimizer_engine(opt_ip1, atm, size(atm,2), basDF, nshb, envDF)
 call threec2e_ip2_optimizer_engine(opt_ip2, atm, size(atm,2), basDF, nshb, envDF)
 !$omp parallel default(shared) &
 !$omp&   private(ish,jsh,ksh,di,dj,dk,p,q,r,a,atomK,offi,offj,offP,shls,buf,ns,v,mu,nu,T,S12,atomI,atomJ, &
-!$omp&           bnP,uTg,ncol)
+!$omp&           bnP,uTg,ncol,SAm,SBm,SKm,Klist,nKm,kk,nrm)
 allocate(buf(maxdo*maxdo*maxda*3), T(maxdo*maxdo,N3), S12(maxdo*maxdo,3,2))
 allocate(bnP(maxdo*maxdo,nContsAux), uTg(N3,nContsAux))
+if (md_ok) allocate(SAm(maxdo*maxdo*3), SBm(maxdo*maxdo*3), SKm(maxdo*maxdo*3*natoms), Klist(natoms))
 !$omp do schedule(dynamic)
 do ish = nBases-1,0,-1
    di = cgto_engine(ish, basDF); offi = ao_offset0(ish); atomI = basDF(1,ish+1) + 1
@@ -658,6 +726,7 @@ do ish = nBases-1,0,-1
          enddo; enddo; enddo
          uTg(:,ncol+1:ncol+dk) = uT(:,offP+1:offP+dk)
          ncol = ncol + dk
+         if (md_ok) cycle
          call threec2e_ip1_engine(buf, shls, atm, size(atm,2), basDF, nshb, envDF, opt_ip1)
          do a = 1,3
             do r = 1,dk; do q = 1,dj; do p = 1,di
@@ -676,11 +745,36 @@ do ish = nBases-1,0,-1
             enddo; enddo; enddo
          enddo
       enddo
+      if (md_ok) then
+         call df_mdj_jx_pair(ish, jsh, Hmd, natoms, SAm, SBm, nKm, Klist, SKm)
+         do a = 1,3
+            do q = 1,dj
+               do p = 1,di
+                  ns = NorVEC(offi+p)*NorVEC(offj+q)
+                  Jx(offi+p,offj+q,a,atomI) = Jx(offi+p,offj+q,a,atomI) + SAm((a-1)*di*dj+(q-1)*di+p)*ns
+                  Jx(offi+p,offj+q,a,atomJ) = Jx(offi+p,offj+q,a,atomJ) + SBm((a-1)*di*dj+(q-1)*di+p)*ns
+               enddo
+            enddo
+         enddo
+         do kk = 1,nKm
+            atomK = Klist(kk) + 1
+            do a = 1,3
+               do q = 1,dj
+                  do p = 1,di
+                     ns = NorVEC(offi+p)*NorVEC(offj+q)
+                     Jx(offi+p,offj+q,a,atomK) = Jx(offi+p,offj+q,a,atomK) &
+                        - SKm((kk-1)*3*di*dj+(a-1)*di*dj+(q-1)*di+p)*ns
+                  enddo
+               enddo
+            enddo
+         enddo
+      endif
       if (ncol .gt. 0) then
          call dgemm('N','T',di*dj,N3,ncol,1.0d0,bnP,maxdo*maxdo,uTg,N3,0.0d0,T,maxdo*maxdo)
       else
          T(1:di*dj,:) = 0.0d0
       endif
+      if (.not. md_ok) then
       do a = 1,3
          do q = 1,dj
             do p = 1,di
@@ -690,6 +784,7 @@ do ish = nBases-1,0,-1
             enddo
          enddo
       enddo
+      endif
       do a = 1,natoms
          do r = 1,3
             do q = 1,dj
@@ -703,6 +798,7 @@ do ish = nBases-1,0,-1
 enddo
 !$omp end do
 deallocate(buf, T, S12, bnP, uTg)
+if (md_ok) deallocate(SAm, SBm, SKm, Klist)
 !$omp end parallel
 tj(3) = omp_get_wtime()-tj0 ; tj0 = omp_get_wtime()
 !$omp parallel do private(a,r,nu,mu) collapse(2)
@@ -723,8 +819,7 @@ deallocate(uT, bvec, cvec, bx, bc, dmax_shell, ao_offset0, aux_offset0, ao_atom,
 tj(4) = omp_get_wtime()-tj0
 block
    character(8) :: ev
-   call get_environment_variable("ENGINE_DFJ_VERBOSE", ev)
-   if (trim(ev) .eq. "1") print '(A,4F8.2)', ' DFJ FOCK timing: pass1 / metric+u / Jx pass / mirror:', tj(1:4)
+      if (engine_verbose .ge. 2) print '(A,4F8.2)', ' DFJ FOCK timing: pass1 / metric+u / Jx pass / mirror:', tj(1:4)
 end block
 call prof_stop("hess_df_j_fock")
 end subroutine integrals_df_j_fock_deriv

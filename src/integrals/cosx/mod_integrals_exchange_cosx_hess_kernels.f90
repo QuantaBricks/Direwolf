@@ -189,10 +189,11 @@ do g = 1,nb
 enddo
 end subroutine kx_free_leg_max
 
-module subroutine kx_proj_leg(nb, bstart, is, xb, wv, x1b, nloc, loc, Gl, KCa, XWl, tk)
+module subroutine kx_proj_leg(nb, bstart, is, xb, wv, x1b, nloc, loc, Gl, KCa, XWl, tk, dev_main)
 integer,intent(in) :: nb, bstart, is, nloc, loc(natoms)
 real(8),intent(in) :: xb(n,nb), wv(nb), x1b(n,3,nb), Gl(nb,n), KCa(nb,N3,nop)
 real(8),intent(inout) :: XWl(n,nop,*), tk(6)
+logical,intent(in) :: dev_main
 real(8),allocatable :: GC(:,:), wGC(:,:), RR(:,:,:), XWe(:,:), wGCp(:,:), dwl(:,:), x1p(:,:), xs(:,:), tmp(:,:)
 integer :: o, y, g2, i2, ee, il, Y1, pa, np_, npp, nsig, c2, y0, ny, yk, nyk, yq
 integer :: plist(natoms), ks(n)
@@ -222,6 +223,7 @@ do o = 1,nop
       wGC(g2,o) = wv(g2)*GC(g2,o)
    enddo
 enddo
+if (.not. dev_main) then
 do y = 1,N3
    do o = 1,nop
       do g2 = 1,nb
@@ -258,6 +260,7 @@ do yk = 0,nyk-1
    call omp_unset_lock(xklk(y0/8+1))
 enddo
 deallocate(xs, tmp)
+endif
 tk(5) = tk(5) + (omp_get_wtime()-tt0) ; tt0 = omp_get_wtime()
 do ee = 1,3
    call dgemm('N','N',n,nop,nb,1.0d0,x1b(1,ee,1),3*n,wGC,nb,0.0d0,XWe,n)
@@ -302,7 +305,7 @@ real(8),allocatable :: wq(:,:), epsy(:,:), GCt(:,:), KT(:,:,:), wA(:,:,:), hv(:,
 integer :: g, i, yy, oo
 real(8) :: t0
 t0 = omp_get_wtime()
-call kx_proj_leg(ng, bst, is, xs, ws, x1s, nloc, loc, Gvs, KCs_, XWl, tk)
+call kx_proj_leg(ng, bst, is, xs, ws, x1s, nloc, loc, Gvs, KCs_, XWl, tk, .false.)
 tsx(5) = tsx(5) + (omp_get_wtime() - t0) ; t0 = omp_get_wtime()
 allocate(epsy(ng,N3), GCt(ng,nop))
 do g = 1,ng

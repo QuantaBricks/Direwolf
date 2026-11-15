@@ -11,6 +11,7 @@ module subroutine integrals_force_df_direct_J(nConts_in, natoms_in, Ptot, force_
 use MOL_info, only: nAtoms
 use mod_profile, only: prof_start, prof_stop
 implicit none
+real(8),allocatable :: fcmp_md(:,:)
 integer,intent(in) :: nConts_in, natoms_in
 real(8),intent(in) :: Ptot(nConts_in,nConts_in)
 real(8),intent(out) :: force_J(natoms_in,3)
@@ -24,6 +25,37 @@ real(8) :: val, maxdiag
 call ensure_df_built()
 allocate(cvec(nContsAux))
 
+block
+   logical :: md_ok
+   force_J = 0.0d0
+   call prof_start("force_df_j_mdj")
+   call df_mdj_force_j(nConts_in, Ptot, natoms_in, force_J, cvec, md_ok)
+   call prof_stop("force_df_j_mdj")
+   block
+      character(len=4) :: ce
+      call get_environment_variable("ENGINE_DFJ_MD", ce)
+      if (md_ok .and. trim(ce) == "2") then
+         allocate(fcmp_md(natoms_in,3)) ; fcmp_md = force_J
+         md_ok = .false.
+      endif
+   end block
+   if (md_ok) then
+      allocate(W_J(nContsAux,nContsAux))
+      do A = 1,nContsAux
+         W_J(:,A) = cvec(:)*cvec(A)
+      enddo
+      block
+         real(8) :: W_J3(nContsAux,nContsAux,1), force_J3(natoms_in,3,1)
+         W_J3(:,:,1) = W_J
+         force_J3(:,:,1) = force_J
+         call df_force_2c2e_contract(1, W_J3, natoms_in, force_J3)
+         force_J = force_J3(:,:,1)
+      end block
+      deallocate(cvec, W_J)
+      return
+   endif
+end block
+
 if (df_direct_cvec_cache_valid) then
    if (all(df_direct_cvec_cache_Ptot .eq. Ptot)) then
       cvec = df_direct_cvec_cache
@@ -36,6 +68,10 @@ if (df_direct_cvec_cache_valid) then
       force_J = 0.0d0
       call prof_start("df_force_direct_contract")
       call df_force_3c2e_contract_Jdirect(nConts_in, Ptot, cvec, natoms_in, force_J)
+      if (allocated(fcmp_md)) then
+         print '(A,2ES12.3)', '[dfj fcmp] max|dF3c|, max|F3c| ', maxval(abs(fcmp_md - force_J)), maxval(abs(force_J))
+         deallocate(fcmp_md)
+      endif
       block
          real(8) :: W_J3(nContsAux,nContsAux,1), force_J3(natoms_in,3,1)
          W_J3(:,:,1) = W_J
@@ -55,6 +91,7 @@ maxdiag = maxval(aux_shell_bound)
 allocate(dmax_shell(0:nBases-1,0:nBases-1))
 call compute_shell_density_bound(nConts_in, Ptot, dmax_shell)
 
+if (.not. allocated(df_triple_ish)) call build_df_triple_list()
 call prof_start("df_force_direct_bpass")
 !$omp parallel private(ish,jsh,ksh,di,dj,dk,offi,offj,offP,shls,p,q,r,val,t) &
 !$omp&   private(bvec_local)
@@ -110,6 +147,10 @@ enddo
 force_J = 0.0d0
 call prof_start("df_force_direct_contract")
 call df_force_3c2e_contract_Jdirect(nConts_in, Ptot, cvec, natoms_in, force_J)
+if (allocated(fcmp_md)) then
+   print '(A,2ES12.3)', '[dfj fcmp] max|dF3c|, max|F3c| ', maxval(abs(fcmp_md - force_J)), maxval(abs(force_J))
+   deallocate(fcmp_md)
+endif
 block
    real(8) :: W_J3(nContsAux,nContsAux,1), force_J3(natoms_in,3,1)
    W_J3(:,:,1) = W_J

@@ -7,10 +7,11 @@
 subroutine DFT_vv10_nlc_pass(Fxc_a, Fxc_b, Exc)
     use MOL_info
     use mod_vv10, only: vv10_evaluate, vv10_nlc_grid_build, vv10_nlc_basis_build, &
-                         NLC_CHUNK, vv10_nlc_chunk_info, vv10_nlc_chunk_val
+                         NLC_CHUNK, vv10_nlc_chunk_info, vv10_nlc_chunk_val, vv10_nlc_direct_wanted, vv10_nlc_chunk_eval
     use mod_profile, only: prof_start, prof_stop
     use omp_lib, only: omp_get_max_threads, omp_get_thread_num, omp_get_num_threads
     implicit none
+    logical :: nlc_host_needed, nlc_direct
     interface
        subroutine openblas_set_num_threads(num_threads) bind(c, name="openblas_set_num_threads")
        use iso_c_binding, only: c_int
@@ -29,9 +30,13 @@ subroutine DFT_vv10_nlc_pass(Fxc_a, Fxc_b, Exc)
     allocate(rho(np), grad(3,np), sig(np))
     allocate(eps(np), Fn(np), Fg(np))
 
-    call prof_start("vv10_gtoeval")
-    call vv10_nlc_basis_build(np)
-    call prof_stop("vv10_gtoeval")
+    nlc_host_needed = .true.
+    nlc_direct = nlc_host_needed .and. vv10_nlc_direct_wanted()
+    if (nlc_host_needed .and. .not. nlc_direct) then
+       call prof_start("vv10_gtoeval")
+       call vv10_nlc_basis_build(np)
+       call prof_stop("vv10_gtoeval")
+    endif
 
     call openblas_set_num_threads(1)
 
@@ -47,10 +52,14 @@ subroutine DFT_vv10_nlc_pass(Fxc_a, Fxc_b, Exc)
       allocate(Pa_s(nconts,nconts), Pb_s(nconts,nconts))
       !$omp do schedule(dynamic)
       do ic = 1,(np+NLC_CHUNK-1)/NLC_CHUNK
-         call vv10_nlc_chunk_info(ic, cstart, cn, nsig, sig_idx)
-         call vv10_nlc_chunk_val(ic, val0_ptr, val1_ptr)
-         val0_chunk(1:nsig,1:cn) = real(val0_ptr(1:nsig,1:cn),8)
-         val1_chunk(1:nsig,:,1:cn) = real(val1_ptr(1:nsig,:,1:cn),8)
+         if (nlc_direct) then
+            call vv10_nlc_chunk_eval(ic, cstart, cn, nsig, sig_idx, val0_chunk, val1_chunk)
+         else
+            call vv10_nlc_chunk_info(ic, cstart, cn, nsig, sig_idx)
+            call vv10_nlc_chunk_val(ic, val0_ptr, val1_ptr)
+            val0_chunk(1:nsig,1:cn) = real(val0_ptr(1:nsig,1:cn),8)
+            val1_chunk(1:nsig,:,1:cn) = real(val1_ptr(1:nsig,:,1:cn),8)
+         endif
          do j = 1,nsig
             Pa_s(1:nsig,j) = Pa(sig_idx(1:nsig),sig_idx(j))
          enddo
@@ -100,10 +109,14 @@ subroutine DFT_vv10_nlc_pass(Fxc_a, Fxc_b, Exc)
       Fxc_a_s_local = 0.0d0
       !$omp do schedule(static)
       do ic = 1,(np+NLC_CHUNK-1)/NLC_CHUNK
-         call vv10_nlc_chunk_info(ic, cstart, cn, nsig, sig_idx)
-         call vv10_nlc_chunk_val(ic, val0_ptr, val1_ptr)
-         val0_chunk(1:nsig,1:cn) = real(val0_ptr(1:nsig,1:cn),8)
-         val1_chunk(1:nsig,:,1:cn) = real(val1_ptr(1:nsig,:,1:cn),8)
+         if (nlc_direct) then
+            call vv10_nlc_chunk_eval(ic, cstart, cn, nsig, sig_idx, val0_chunk, val1_chunk)
+         else
+            call vv10_nlc_chunk_info(ic, cstart, cn, nsig, sig_idx)
+            call vv10_nlc_chunk_val(ic, val0_ptr, val1_ptr)
+            val0_chunk(1:nsig,1:cn) = real(val0_ptr(1:nsig,1:cn),8)
+            val1_chunk(1:nsig,:,1:cn) = real(val1_ptr(1:nsig,:,1:cn),8)
+         endif
          do i = 1,cn
             Gmat_chunk(1:nsig,i) = grad(1,cstart+i-1)*val1_chunk(1:nsig,1,i) + grad(2,cstart+i-1)*val1_chunk(1:nsig,2,i) &
                              + grad(3,cstart+i-1)*val1_chunk(1:nsig,3,i)

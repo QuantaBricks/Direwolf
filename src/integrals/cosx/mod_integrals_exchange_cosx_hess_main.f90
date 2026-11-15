@@ -46,6 +46,13 @@ logical :: psub
 logical,allocatable :: pok(:), pd2(:), shon(:)
 integer,allocatable :: aoc(:), slist(:)
 integer,allocatable :: ch_ib(:), ch_st(:), ch_nb(:)
+logical :: use_t5g, t5on
+integer :: nt5, q5
+integer,allocatable :: t5si(:), t5sj(:), t5ix(:), t5acc(:)
+logical :: hcon, chunk_ok
+integer :: nhc
+integer,allocatable :: hcsi(:), hcsj(:), hcpar(:)
+real(8),allocatable :: hcG(:), hcGt(:), hcTk(:), hcTm(:), hceps(:), hcXK(:,:,:)
 
 if (.not. (want_kx .and. kproj .and. lowrank)) then
    print *, "cosx hess_main_pass: needs dK/dR.C with the occupied coefficients (D = C C^T),"
@@ -121,7 +128,9 @@ if (fit) then
       call omp_init_lock(zlock(i))
    enddo
 endif
+use_t5g = .false.
 !$omp parallel default(shared) &
+!$omp&  private(t5on,nt5,q5,t5si,t5sj,t5ix,t5acc,hcon,chunk_ok,nhc,hcsi,hcsj,hcpar,hcG,hcGt,hcTk,hcTm,hceps,hcXK) &
 !$omp&  private(ich,xb,x1b,x2b,wv,bv,av,Gv,Gtv,hv,htv,Psi,kv,mv,kp,mp,epsy,Hp,Hpp) &
 !$omp&  private(Hloc,gloc,Zloc,env_g,buf,dbuf,dbuf2,dbpp,dbvp,dbpp2,int_cache,Aval,Abra,Aket,th) &
 !$omp&  private(k_bound,esp_eff,r_far,seg_ab,seg_cl,seg_len2,seg_t,nij,sbb,sbk,skk) &
@@ -155,6 +164,10 @@ allocate(env_g(size(env) + 3*BATCH))
 env_g(1:size(env)) = env(1:size(env))
 off_grids = size(env)
 env_g(9) = hs_rsomega
+if (hs_lrc .ne. 0.0d0) env_g(14) = hs_lrc
+t5on = .false.
+hcon = .false.
+chunk_ok = .false.
 
 !$omp do schedule(static,1)
 do ich = 1,nch
@@ -251,6 +264,7 @@ do ich = 1,nch
          else
             esp_eff = cosx_esp_bound(si,sj)
          endif
+         esp_eff = esp_eff*(1.0d0 + abs(hs_lrc))
          dfac = 2.0d0*(sqa(si)+sqa(sj))
          k_bound = esp_eff*max(Tmax(si)*Tmax(sj), dfac*Fmax(si)*Fmax(sj))
          kx_bound = esp_eff*Lw*max(Tu(sj)*cmx(si), Tu(si)*cmx(sj), &
@@ -293,6 +307,9 @@ do ich = 1,nch
    allocate(kv(nbsc,N3,n,ns), mv(nbsc,N3,n,ns))
    if (psub) allocate(KCc(nbsc,N3,nop,ns), MCc(nbsc,N3,nop,ns))
 
+   chunk_ok = .false.
+
+   if (.not. chunk_ok) then
    do g0 = 0, nb-1, nbsc
    ng = min(nbsc, nb-g0)
    Asub(:,:,1:ng) = 0.0d0
@@ -587,6 +604,7 @@ do ich = 1,nch
       tpost = tpost + (omp_get_wtime() - tq3)
    endif
    enddo
+   endif
 
    do is = 1,ns
       call hess_scatter_par(nb, bstart, Hp(:,:,:,is), Hpp(:,:,:,is), Hloc(:,:,5,is))
@@ -599,7 +617,7 @@ do ich = 1,nch
    allocate(hv(nb,n,ns), htv(nb,n,ns), Psi(nb,n,ns), epsy(nb,N3))
    tsq = omp_get_wtime()
    do is = 1,ns
-      call kx_proj_leg(nb, bstart, is, xb, wv, x1b, nloc, loc, Gv(:,:,is), KCc(:,:,:,is), XWloc, tkx)
+      call kx_proj_leg(nb, bstart, is, xb, wv, x1b, nloc, loc, Gv(:,:,is), KCc(:,:,:,is), XWloc, tkx, chunk_ok)
    enddo
    deallocate(qv)
    ts(5) = ts(5) + (omp_get_wtime() - tsq) ; tsq = omp_get_wtime()
@@ -615,6 +633,11 @@ do ich = 1,nch
       do g = 1,nb
          epsall(bstart+g-1,is) = dot_product(av(g,:,is), Gv(g,:,is))
       enddo
+      if (chunk_ok) then
+         do yy = 1,N3
+            epsy(:,yy) = hceps(nb*(yy-1)+1:nb*yy)
+         enddo
+      else
       epsy = 0.0d0
       allocate(GCt(nb,nop))
       call dgemm('N','N',nb,nop,n,1.0d0,Gv(:,:,is),nb,Cp(1,1,is),n,0.0d0,GCt,nb)
@@ -633,6 +656,7 @@ do ich = 1,nch
             enddo
          enddo
       enddo
+      endif
       do yy = 1,N3
          do g = 1,nb
             gloc(yy,is) = gloc(yy,is) + dwdr(mod(yy-1,3)+1,(yy-1)/3+1,bstart+g-1)*epsall(bstart+g-1,is) &
@@ -641,6 +665,7 @@ do ich = 1,nch
       enddo
       call dgemm('N','N',N3,N3,nb,1.0d0,dwdr(1,1,bstart),N3,epsy,nb,1.0d0,Hloc(1,1,2,is),N3)
       ts(6) = ts(6) + (omp_get_wtime() - tsq) ; tsq = omp_get_wtime()
+      if (.not. chunk_ok) then
       allocate(KT(nb,nop,N3))
       do yy = 1,N3
          do oo = 1,nop
@@ -660,6 +685,7 @@ do ich = 1,nch
       enddo
       call dgemm('T','N',N3,N3,nb*nop,1.0d0,KT,nb*nop,B1C(1,1,1,is),nb*nop,1.0d0,Hloc(1,1,3,is),N3)
       deallocate(KT)
+      endif
       ts(7) = ts(7) + (omp_get_wtime() - tsq) ; tsq = omp_get_wtime()
       Hp(:,:,:,1) = 0.0d0 ; Hpp(:,:,:,1) = 0.0d0
       call hess_xxy_contract(nb, bstart, ib, x2b, wv, Psi(:,:,is), Hloc(:,:,4,is), Hp(:,:,:,1), Hpp(:,:,:,1))
@@ -679,6 +705,7 @@ do ich = 1,nch
       ts(8) = ts(8) + (omp_get_wtime() - tsq) ; tsq = omp_get_wtime()
    enddo
    deallocate(hv, htv, Psi, epsy)
+   if (allocated(hceps)) deallocate(hceps)
    endif
    deallocate(xb, x1b, x2b, wv, bv, av, Gv, Gtv, kv, mv, kp, mp)
    deallocate(Hp, Hpp, Aval, Abra, Aket, th)

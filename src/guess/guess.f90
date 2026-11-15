@@ -6,7 +6,6 @@
 subroutine guess(info,Gtype,Pa_chk,Pb_chk)
 
 use MOL_info
-use GRID_info, only: xcgrid_dynamic
 use mod_vv10, only: vv10_active_now, vv10_dynamic
     implicit none
 INCLUDE 'parameter.h'
@@ -58,7 +57,6 @@ INCLUDE 'parameter.h'
        Fb = 0.0d0
        C_a = 0.0d0
        C_b = 0.0d0
-       if (xcgrid_dynamic) call xcgrid_refine()
        if (vv10_dynamic) vv10_active_now = .true.
        block
           real(8),allocatable :: P_ortho(:,:), Tmp3(:,:), ew(:)

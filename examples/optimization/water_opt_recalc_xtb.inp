@@ -15,9 +15,9 @@ H    0.0000   -0.7700   -0.4800
 &end
 
 &opt
- opt_hess = 'xtb'           ! xtb Hessian at the first step
- opt_hess_every = 2          ! recomputed with xtb at the current geometry every 2 cycles
- opt_hess_recalc = 'xtb'     ! 'calc' (analytic) or 'xtb'; default follows opt_hess
- opt_xtb_cmd = 'xtb'         ! xtb executable (full path if not on PATH)
- opt_xtb_args = ''           ! extra xtb arguments, e.g. '--alpb water' for a solvated run
+ hessian = 'xtb'           ! xtb Hessian at the first step
+ recomp_hess = 2          ! recomputed with xtb at the current geometry every 2 cycles
+ hess_recalc = 'xtb'     ! 'calc' (analytic) or 'xtb'; default follows hess
+ xtb_cmd = 'xtb'         ! xtb executable (full path if not on PATH)
+ xtb_args = ''           ! extra xtb arguments, e.g. '--alpb water' for a solvated run
 &end

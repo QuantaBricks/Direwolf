@@ -15,5 +15,5 @@ H    0.0000   -0.7700   -0.4800
 &end
 
 &opt
- opt_constraints = 'bond 1 2 1.10'
+ constraints = 'bond 1 2 1.10'
 &end

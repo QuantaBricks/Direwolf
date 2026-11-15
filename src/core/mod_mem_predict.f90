@@ -66,7 +66,7 @@ diis_env = ""
 call get_environment_variable("ENGINE_DIIS_WINDOW", diis_env)
 if (len_trim(diis_env) .gt. 0) read(diis_env,*) diis_max
 if (diis_max .lt. 1) diis_max = 1
-diis_bytes = 6_8*n8*n8*int(diis_max,8)*4_8
+diis_bytes = 2_8*16_8*(n8*(n8+1_8)/2_8)*int(diis_max,8)
 
 transient_bytes = 4_8*n8*n8*8_8
 

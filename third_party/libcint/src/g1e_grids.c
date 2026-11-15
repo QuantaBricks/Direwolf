@@ -10,6 +10,13 @@
 #include "misc.h"
 #include "g1e.h"
 #include "g1e_grids.h"
+// Direwolf: env slot (unused by libcint) holding c for the combined operator
+// 1/r + c erf(|omega| r)/r, requested with omega < 0 and c != 0: one quadrature
+// with the plain roots and the erf roots (the short-range path's doubled
+// roots, with +c sqrt(theta) instead of -sqrt(theta) on the erf half and no
+// short-range cutoff). COSX for range-separated hybrids: A_full + c A_LR in
+// one integral evaluation.
+#define PTR_RANGE_LRCOEF        13
 #include "rys_roots.h"
 
 /* rys_roots_grids_batch.c - new, separate file, only used here (COSX's
@@ -35,7 +42,7 @@ void CINTinit_int1e_grids_EnvVars(CINTEnvVars *envs, FINT *ng, FINT *shls,
         int rys_order = envs->nrys_roots;
         int nroots = rys_order;
         double omega = env[PTR_RANGE_OMEGA];
-        if (omega < 0 && rys_order <= 3) {
+        if (omega < 0 && (rys_order <= 3 || env[PTR_RANGE_LRCOEF] != 0)) {
                 nroots *= 2;
         }
         envs->rys_order = rys_order;
@@ -152,6 +159,52 @@ FINT CINTg0_1e_grids_nm(double *g, double cutoff,
                                 w[ig+GRID_BLKSIZE*i] = wbuf[i] * fac1;
                         }
                 }
+                }
+        } else if (omega < 0. && envs->env[PTR_RANGE_LRCOEF] != 0.) {
+                // 1/r + c erf(|omega| r)/r (zeta = 0)
+                double lrc = envs->env[PTR_RANGE_LRCOEF];
+                int rorder = envs->rys_order;
+                fac1 = envs->fac[0] / aij;
+                omega2 = omega * omega;
+                theta = omega2 / (omega2 + aij);
+                sqrt_theta = sqrt(theta);
+                double fac_lr = fac1 * sqrt_theta * lrc;
+                if (rorder <= 3) {
+                        double xbatch[GRID_BLKSIZE], xbatch2[GRID_BLKSIZE];
+                        double rbatch[GRID_BLKSIZE*3], wbatch2[GRID_BLKSIZE*3];
+                        double rbatchb[GRID_BLKSIZE*3], wbatchb[GRID_BLKSIZE*3];
+                        for (ig = 0; ig < bgrids; ig++) {
+                                xbatch[ig] = aij * RGSQUARE(rijrg, ig);
+                                xbatch2[ig] = theta * xbatch[ig];
+                        }
+                        switch (rorder) {
+                        case 1: CINTrys_roots1_grids_batch(bgrids, xbatch, rbatch, wbatch2);
+                                CINTrys_roots1_grids_batch(bgrids, xbatch2, rbatchb, wbatchb); break;
+                        case 2: CINTrys_roots2_grids_batch(bgrids, xbatch, rbatch, wbatch2);
+                                CINTrys_roots2_grids_batch(bgrids, xbatch2, rbatchb, wbatchb); break;
+                        default: CINTrys_roots3_grids_batch(bgrids, xbatch, rbatch, wbatch2);
+                                CINTrys_roots3_grids_batch(bgrids, xbatch2, rbatchb, wbatchb); break;
+                        }
+                        for (ig = 0; ig < bgrids; ig++) {
+                                for (i = 0; i < rorder; i++) {
+                                        u[ig+GRID_BLKSIZE*i] = rbatch[rorder*ig+i] / (rbatch[rorder*ig+i] + 1);
+                                        w[ig+GRID_BLKSIZE*i] = wbatch2[rorder*ig+i] * fac1;
+                                        u[ig+GRID_BLKSIZE*(i+rorder)] = rbatchb[rorder*ig+i] / (rbatchb[rorder*ig+i] + 1) * theta;
+                                        w[ig+GRID_BLKSIZE*(i+rorder)] = wbatchb[rorder*ig+i] * fac_lr;
+                                }
+                        }
+                } else {
+                        for (ig = 0; ig < bgrids; ig++) {
+                                x = aij * RGSQUARE(rijrg, ig);
+                                CINTrys_roots(rorder, x, ubuf, wbuf);
+                                CINTrys_roots(rorder, theta*x, ubuf+rorder, wbuf+rorder);
+                                for (i = 0; i < rorder; i++) {
+                                        u[ig+GRID_BLKSIZE*i] = ubuf[i] / (ubuf[i] + 1);
+                                        w[ig+GRID_BLKSIZE*i] = wbuf[i] * fac1;
+                                        u[ig+GRID_BLKSIZE*(i+rorder)] = ubuf[i+rorder] / (ubuf[i+rorder] + 1) * theta;
+                                        w[ig+GRID_BLKSIZE*(i+rorder)] = wbuf[i+rorder] * fac_lr;
+                                }
+                        }
                 }
         } else if (omega < 0.) { // short-range part of range-separated Coulomb
                 a0 = aij;

@@ -10,12 +10,15 @@ public :: vv10_set
 public :: vv10_evaluate
 public :: vv10_report
 public :: vv10_nlc_grid_reset
+public :: vv10_nlc_release_values
 public :: vv10_nlc_grid_build
 public :: vv10_nlc_grid_retrieve
 public :: vv10_nlc_basis_build
 public :: NLC_CHUNK
 public :: vv10_nlc_chunk_info
 public :: vv10_nlc_chunk_val
+public :: vv10_nlc_direct_wanted
+public :: vv10_nlc_chunk_eval
 public :: vv10_omega_kappa
 public :: vv10_grid_force
 public :: vv10_beta_val
@@ -68,6 +71,7 @@ type :: NlcValBlock
    real(4),allocatable :: val1(:,:,:)
 end type NlcValBlock
 logical,save :: nlc_basis_built = .false.
+logical,save :: nlc_stream_tried = .false.
 type(NlcValBlock),allocatable,save,target :: nlc_val_blocks(:)
 integer,allocatable,save :: nlc_chunk_nsig(:)
 integer,allocatable,save :: nlc_chunk_sig_idx(:,:)
@@ -557,6 +561,79 @@ subroutine vv10_report_set(Enl)
     vv10_computed = .true.
 end subroutine vv10_report_set
 
+subroutine vv10_nlc_release_values()
+    implicit none
+    integer :: ib
+    if (allocated(nlc_val_blocks)) then
+       do ib = 1,size(nlc_val_blocks)
+          if (allocated(nlc_val_blocks(ib)%val0)) deallocate(nlc_val_blocks(ib)%val0)
+          if (allocated(nlc_val_blocks(ib)%val1)) deallocate(nlc_val_blocks(ib)%val1)
+       enddo
+       deallocate(nlc_val_blocks)
+    endif
+    if (allocated(nlc_chunk_nsig))    deallocate(nlc_chunk_nsig)
+    if (allocated(nlc_chunk_sig_idx)) deallocate(nlc_chunk_sig_idx)
+    nlc_basis_built = .false.
+end subroutine vv10_nlc_release_values
+
+function vv10_nlc_direct_wanted() result(direct)
+    use MOL_info, only: nconts
+    implicit none
+    logical :: direct
+    integer,parameter :: VV10_DIRECT_NCONTS = 2000
+    integer,save :: thr = -1
+    character(len=32) :: v
+    integer :: st
+    if (thr < 0) then
+       thr = VV10_DIRECT_NCONTS
+       call get_environment_variable("ENGINE_VV10_DIRECT_NCONTS", v, status=st)
+       if (st == 0 .and. len_trim(v) > 0) read(v,*,iostat=st) thr
+       if (st /= 0 .or. thr < 0) thr = VV10_DIRECT_NCONTS
+    endif
+    direct = nconts > thr
+end function vv10_nlc_direct_wanted
+
+subroutine vv10_nlc_chunk_eval(ib, cstart, cn, nsig, sig_idx, val0, val1)
+    use MOL_info, only: nconts
+    implicit none
+    integer,intent(in) :: ib
+    integer,intent(out) :: cstart, cn, nsig
+    integer,allocatable,intent(out) :: sig_idx(:)
+    real(8),intent(inout) :: val0(:,:), val1(:,:,:)
+    real(8),parameter :: SIG_CUTOFF = 1.0d-10
+    real(8),allocatable :: f0(:,:), f1(:,:,:)
+    logical,allocatable :: sig(:)
+    integer :: i, j, k
+    cstart = (ib-1)*NLC_CHUNK + 1
+    cn = min(NLC_CHUNK, nlc_npts-cstart+1)
+    allocate(f0(nconts,cn), f1(nconts,3,cn), sig(nconts))
+    do i = 1,cn
+       block
+         real(8) :: v0(nconts), v1(nconts,3)
+         call GTOeval_point(nlc_coor(:,cstart+i-1), v0, v1)
+         f0(:,i) = v0
+         f1(:,:,i) = v1
+       end block
+    enddo
+    sig = (maxval(abs(f0),dim=2) .gt. SIG_CUTOFF) .or. (maxval(maxval(abs(f1),dim=2),dim=2) .gt. SIG_CUTOFF)
+    nsig = count(sig)
+    allocate(sig_idx(nsig))
+    k = 0
+    do j = 1,nconts
+       if (sig(j)) then
+          k = k+1
+          sig_idx(k) = j
+       endif
+    enddo
+    do i = 1,cn
+       val0(1:nsig,i) = real(real(f0(sig_idx,i),4),8)
+       do j = 1,3
+          val1(1:nsig,j,i) = real(real(f1(sig_idx,j,i),4),8)
+       enddo
+    enddo
+    deallocate(f0, f1, sig)
+end subroutine vv10_nlc_chunk_eval
+
 subroutine vv10_nlc_grid_reset()
     implicit none
     integer :: ib
@@ -574,6 +651,7 @@ subroutine vv10_nlc_grid_reset()
     nlc_n_chunks = 0
     nlc_grid_built = .false.
     nlc_basis_built = .false.
+    nlc_stream_tried = .false.
     nlc_npts = 0
 end subroutine vv10_nlc_grid_reset
 

@@ -18,7 +18,9 @@ interface
                        cosmo_smd,cosmo_solvent,&
                        force_out,energy_out,MLcharge_out,iconv,econv,&
                        mem_grid_gb,mem_2e_gb,scf_conv_level,basedir,&
-                       dens_in_a,dens_in_b,dens_out_a,dens_out_b)
+                       dens_in_a,dens_in_b,dens_out_a,dens_out_b,&
+                       opts)
+   use mod_engine_options, only: engine_options_t
    implicit none
    integer       :: ncenters,imult,icharge,atomchg(ncenters)
    character     :: baselable*30,functional_in*30
@@ -56,7 +58,8 @@ interface
    character(len=*),intent(in) :: basedir
    real(8),intent(in) :: dens_in_a(:,:), dens_in_b(:,:)
    real(8),intent(out),allocatable :: dens_out_a(:,:), dens_out_b(:,:)
-   end subroutine EngineUp
+      type(engine_options_t),intent(inout) :: opts
+end subroutine EngineUp
 end interface
 
 end module mod_engineup_interface

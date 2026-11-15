@@ -7,5 +7,5 @@
  K = 'RI'
 &end
 &opt
- opt_restart = .false.
+ restart = .false.
 &end

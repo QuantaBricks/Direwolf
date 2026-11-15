@@ -10,8 +10,8 @@
 &end
 
 &opt
- opt_ts = .true.
- opt_hess = 'xtb'           ! start from the xtb Hessian instead (negative curvature kept)
+ ts = .true.
+ hessian = 'xtb'           ! start from the xtb Hessian instead (negative curvature kept)
 &end
 
 &atoms

@@ -6,7 +6,7 @@
 module mod_molden
 implicit none
 private
-public :: write_molden, read_molden
+public :: write_molden, write_molden_mos, read_molden, elem_symbol
 
 contains
 
@@ -29,25 +29,20 @@ do ia = 1,Natoms
 enddo
 end function build_ao_perm
 
-subroutine write_molden(filename)
+subroutine write_molden_head(unit_md)
 use MOL_info
 use mod_integrals, only: engine_puream
 implicit none
 INCLUDE 'parameter.h'
-character(len=*),intent(in) :: filename
+integer,intent(in) :: unit_md
 character(len=1),parameter :: shell_letter(0:4) = ['s','p','d','f','g']
-integer,allocatable :: perm(:)
-integer :: unit_md, ia, ish, ip, l, mo
-
-perm = build_ao_perm(engine_puream)
-
-open(newunit=unit_md, file=trim(filename), status='replace', action='write')
+integer :: ia, ish, ip, l
 
 write(unit_md,'(A)') '[Molden Format]'
 
 write(unit_md,'(A)') '[Atoms] AU'
 do ia = 1,Natoms
-   write(unit_md,'(A2,2I5,3F20.10)') elem_symbol(atoms(ia)%charge), ia, atoms(ia)%charge, &
+   write(unit_md,'(A2,2I5,3F20.10)') elem_symbol(atoms(ia)%charge), ia, atoms(ia)%charge - atoms(ia)%ecpCoreElec, &
         atoms(ia)%coor(1)*ans2bohr, atoms(ia)%coor(2)*ans2bohr, atoms(ia)%coor(3)*ans2bohr
 enddo
 
@@ -75,6 +70,24 @@ else
    write(unit_md,'(A)') '[15G]'
 endif
 
+end subroutine write_molden_head
+
+subroutine write_molden(filename)
+use MOL_info
+use mod_integrals, only: engine_puream
+implicit none
+INCLUDE 'parameter.h'
+character(len=*),intent(in) :: filename
+character(len=1),parameter :: shell_letter(0:4) = ['s','p','d','f','g']
+integer,allocatable :: perm(:)
+integer :: unit_md, mo
+
+perm = build_ao_perm(engine_puream)
+
+open(newunit=unit_md, file=trim(filename), status='replace', action='write')
+
+call write_molden_head(unit_md)
+
 write(unit_md,'(A)') '[MO]'
 if (Multi .eq. 1) then
    do mo = 1,nConts
@@ -95,6 +108,32 @@ endif
 close(unit_md)
 
 end subroutine write_molden
+
+subroutine write_molden_mos(filename, nmo, coef, label, ene, occ, spin)
+use MOL_info, only: nConts
+use mod_integrals, only: engine_puream
+implicit none
+character(len=*),intent(in) :: filename
+integer,intent(in) :: nmo
+real(8),intent(in) :: coef(nConts,nmo), ene(nmo), occ(nmo)
+character(len=*),intent(in) :: label(nmo), spin(nmo)
+integer,allocatable :: perm(:)
+integer :: unit_md, mo, k
+perm = build_ao_perm(engine_puream)
+open(newunit=unit_md, file=trim(filename), status='replace', action='write')
+call write_molden_head(unit_md)
+write(unit_md,'(A)') '[MO]'
+do mo = 1,nmo
+   write(unit_md,'(A,A)')      'Sym= ', trim(label(mo))
+   write(unit_md,'(A,F16.8)')  'Ene= ', ene(mo)
+   write(unit_md,'(A,A)')      'Spin= ', trim(spin(mo))
+   write(unit_md,'(A,F10.6)')  'Occup= ', occ(mo)
+   do k = 1,nConts
+      write(unit_md,'(I5,F20.10)') k, coef(perm(k),mo)
+   enddo
+enddo
+close(unit_md)
+end subroutine write_molden_mos
 
 subroutine shell_perm(ao_base, l, is_sph, perm)
 implicit none

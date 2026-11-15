@@ -10,9 +10,9 @@
 &end
 
 &opt
- opt_ts = .true.
- opt_hess = 'calc'          ! analytic Hessian at the first step
- opt_hess_every = 3         ! and every 3 cycles (Gaussian recalc=3)
+ ts = .true.
+ hessian = 'calc'          ! analytic Hessian at the first step
+ recomp_hess = 3         ! and every 3 cycles (Gaussian recalc=3)
 &end
 
 &atoms

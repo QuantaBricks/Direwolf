@@ -74,7 +74,7 @@ block
    allocate(keep(d_n_tess))
    nk = 0
    do kk = 1,d_n_tess
-      if (d_tess_area(kk)*bohr2ang*bohr2ang >= 1.0d-4) then
+      if (d_tess_area(kk)*bohr2ang*bohr2ang >= cosmo_min_tess_area_ang2()) then
          nk = nk+1
          keep(nk) = kk
       endif

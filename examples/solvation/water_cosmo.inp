@@ -13,7 +13,6 @@ H          -0.7584         0.0000         0.5861
 &end
 
 &cosmo
- cosmo_on          = .true.
- cosmo_cavity_type = 'gepol'
- cosmo_solvent     = 'water'
+ cavity_type = 'gepol'
+ solvent     = 'water'
 &end

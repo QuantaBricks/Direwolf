@@ -22,7 +22,7 @@ public :: exchange_build_cosx_sr
 public :: exchange_build_lr
 public :: exchange_build_df
 public :: exchange_build_df_lr
-public :: exchange_force_cosx
+public :: exchange_force_cosx, cosx_lr_fuse_on
 
 logical :: cosx_enabled = .false.
 
@@ -31,6 +31,15 @@ real(8) :: RS_omega = 0.0d0
 real(8) :: RS_beta  = 0.0d0
 
 contains
+
+logical function cosx_lr_fuse_on()
+    character(len=8) :: e
+    cosx_lr_fuse_on = cosx_enabled .and. RS_omega > 0.0d0 .and. HF_exchange_frac > 0.0d0
+    if (cosx_lr_fuse_on) then
+       call get_environment_variable("ENGINE_COSX_DUAL", e)
+       cosx_lr_fuse_on = (trim(e) .ne. "0")
+    endif
+end function cosx_lr_fuse_on
 
 subroutine exchange_build(nConts, Da, Db, Ka, Kb)
     implicit none

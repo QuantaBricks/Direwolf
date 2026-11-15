@@ -201,6 +201,22 @@ integer :: xcgrid_zone3 = 110
 integer :: xcgrid_zone5 = 146
 integer :: xcgrid_zone4 = -1
 integer :: xcgrid_zone4_h = -1
+
+logical :: xcgrid_td_active = .false.
+logical :: xcgrid_nmr_active = .false.
+integer :: xcgrid_nmr_zone(5) = (/26, 74, 194, 194, 110/)
+integer :: xcgrid_nmr_hpeak = 194
+integer :: xcgrid_open_shell_zone3 = 194
+integer :: xcgrid_open_shell_zone2 = 110
+real(8) :: xcgrid_td_rs(7) = (/0.40d0, 0.80d0, 0.80d0, 0.80d0, 0.80d0, 0.80d0, 0.80d0/)
+integer :: xcgrid_td_zone(5) = (/14, 26, 86, 110, 86/)
+integer :: xcgrid_td_hpeak = 50
+logical :: xcgrid_td_light = .false.
+logical :: xcgrid_td_tddft = .false.
+logical :: xcgrid_td_triplet = .false.
+real(8) :: xcgrid_td_light_rs(7) = (/0.35d0, 0.65d0, 0.55d0, 0.55d0, 0.55d0, 0.55d0, 0.55d0/)
+integer :: xcgrid_td_light_zone(5) = (/14, 26, 50, 86, 50/)
+integer :: xcgrid_td_light_hpeak = 50
 integer :: xcgrid_zone4_z(103) = -1
 integer :: xcgrid_zone1_z(103) = -1
 integer :: xcgrid_zone2_z(103) = -1
@@ -214,10 +230,6 @@ integer :: xcgrid_ang_margin = 0
 logical :: xcgrid_audit_only = .false.
 real(8) :: xcgrid_int_rho = 0.0d0
 integer :: xcgrid_level = XCGRID_FINE
-integer :: xcgrid_active_coarse = XCGRID_COARSE
-integer :: xcgrid_active_fine   = XCGRID_FINE
-logical :: xcgrid_dynamic = .false.
-logical :: xcgrid_refined = .false.
 logical :: xcgrid_theory_dynamic = .false.
 logical :: xcgrid_theory_refined = .false.
 integer :: xcgrid_theory_dynamic_level = XCGRID_LVL_SMOOTHDFT
@@ -777,6 +789,17 @@ else
 endif
 end function xcgrid_theory_legacy_anggrid
 
+logical function open_small(nmax)
+use MOL_info, only: nAtoms
+integer,intent(in) :: nmax
+open_small = (nAtoms <= nmax)
+end function open_small
+
+logical function multiplicity_open()
+use MOL_info, only: Multi
+multiplicity_open = (Multi > 1)
+end function multiplicity_open
+
 subroutine xcgrid_theory_apply()
 implicit none
 real(8) :: rs(7)
@@ -786,8 +809,37 @@ integer :: eff_level, eff_tier, ag
 
 eff_level = xcgrid_theory_level
 eff_tier  = xcgrid_theory_tier
-call xcgrid_theory_cell(xcgrid_theory_level, xcgrid_theory_tier, &
+block
+   character(len=16) :: oz
+   integer :: oios, ozv
+   call get_environment_variable("ENGINE_XC_OPEN_ZONE3", oz)
+   if (len_trim(oz) > 0) then
+      read(oz, *, iostat=oios) ozv
+      if (oios == 0) xcgrid_open_shell_zone3 = ozv
+   endif
+   call get_environment_variable("ENGINE_XC_OPEN_ZONE2", oz)
+   if (len_trim(oz) > 0) then
+      read(oz, *, iostat=oios) ozv
+      if (oios == 0) xcgrid_open_shell_zone2 = ozv
+   endif
+end block
+if (multiplicity_open() .and. eff_level .eq. XCGRID_LVL_R2SCAN .and. eff_tier .eq. XCGRID_TIER_REGULAR) then
+   block
+      character(len=8) :: oh
+      integer :: nmx, ios
+      nmx = 4
+      call get_environment_variable("ENGINE_XC_OPEN_META_HIGH_NMAX", oh)
+      if (len_trim(oh) > 0) read(oh, *, iostat=ios) nmx
+      call get_environment_variable("ENGINE_XC_OPEN_META_HIGH", oh)
+      if (trim(oh) .ne. "0" .and. open_small(nmx)) eff_tier = XCGRID_TIER_HIGH
+   end block
+endif
+call xcgrid_theory_cell(eff_level, eff_tier, &
                         rs, zone434, zone302, aij, ovn, ovz, ovs)
+if (multiplicity_open()) then
+   if (xcgrid_open_shell_zone3 > 0) zone434(3) = max(zone434(3), xcgrid_open_shell_zone3)
+   if (xcgrid_open_shell_zone2 > 0) zone434(2) = max(zone434(2), xcgrid_open_shell_zone2)
+endif
 
 if (rs(1) < 0.0d0 .or. zone434(1) < 0 .or. zone302(1) < 0 .or. aij < 0) then
    eff_level = XCGRID_LVL_SMOOTHDFT
@@ -903,6 +955,50 @@ if (eff_level .eq. XCGRID_LVL_SMOOTHDFT) then
    xcgrid_radpot_rowscale_z(11:18) = 1.5d0
 endif
 
+if (xcgrid_td_active) then
+   block
+      character(len=256) :: tn
+      integer :: tios
+      real(8) :: trs(7)
+      integer :: tz(5), th
+      trs = xcgrid_td_rs ; tz = xcgrid_td_zone ; th = xcgrid_td_hpeak
+      if (xcgrid_td_light .and. eff_level .eq. XCGRID_LVL_SMOOTHDFT) then
+         trs = xcgrid_td_light_rs ; tz = xcgrid_td_light_zone ; th = xcgrid_td_light_hpeak
+      endif
+      if (xcgrid_td_tddft .and. eff_level .eq. XCGRID_LVL_WB97XD) then
+         trs = 1.1d0 ; trs(1) = 0.55d0
+      endif
+      if (eff_level .eq. XCGRID_LVL_M06) then
+         trs = 1.1d0 ; trs(1) = 0.55d0
+         tz = (/26, 74, 194, 266, 194/) ; th = 194
+      endif
+      call get_environment_variable("ENGINE_TD_GRID_RS", tn)
+      if (len_trim(tn) > 0) read(tn, *, iostat=tios) trs
+      tn = ''
+      call get_environment_variable("ENGINE_TD_GRID_Z", tn)
+      if (len_trim(tn) > 0) read(tn, *, iostat=tios) tz
+      tn = ''
+      call get_environment_variable("ENGINE_TD_GRID_H", tn)
+      if (len_trim(tn) > 0) read(tn, *, iostat=tios) th
+      if (xcgrid_td_triplet .and. xcgrid_open_shell_zone2 > 0) tz(2) = max(tz(2), xcgrid_open_shell_zone2)
+      if (multiplicity_open()) then
+         if (xcgrid_open_shell_zone3 > 0) tz(3) = max(tz(3), xcgrid_open_shell_zone3)
+         if (xcgrid_open_shell_zone2 > 0) tz(2) = max(tz(2), xcgrid_open_shell_zone2)
+         tz(4) = max(tz(4), 350) ; tz(5) = max(tz(5), 146) ; th = max(th, 194)
+      endif
+      xcgrid_theory_rowscale = trs
+      xcgrid_zone1 = tz(1) ; xcgrid_zone2 = tz(2) ; xcgrid_zone3 = tz(3)
+      xcgrid_zone4 = tz(4) ; xcgrid_zone5 = tz(5)
+      xcgrid_zone4_h = th
+      xcgrid_radpot_rowscale_z = 0.0d0
+      xcgrid_zone1_z = -1 ; xcgrid_zone2_z = -1 ; xcgrid_zone3_z = -1 ; xcgrid_zone4_z = -1
+   end block
+endif
+if (xcgrid_nmr_active) then
+   xcgrid_zone1 = max(xcgrid_zone1, xcgrid_nmr_zone(1)) ; xcgrid_zone2 = max(xcgrid_zone2, xcgrid_nmr_zone(2))
+   xcgrid_zone3 = max(xcgrid_zone3, xcgrid_nmr_zone(3)) ; xcgrid_zone4 = max(xcgrid_zone4, xcgrid_nmr_zone(4))
+   xcgrid_zone5 = max(xcgrid_zone5, xcgrid_nmr_zone(5)) ; xcgrid_zone4_h = max(xcgrid_zone4_h, xcgrid_nmr_hpeak)
+endif
 end subroutine xcgrid_theory_apply
 
 integer function xcgrid_prune_angular(anggrid, ratio, row, ang_cap) result(cursphpot)
@@ -991,6 +1087,7 @@ cap = xcgrid_lebedev_for_degree(2*lmax + xcgrid_ang_margin)
 end function xcgrid_ang_cap
 
 subroutine xcgrid_tune_from_env(functional)
+use MOL_info, only: engine_quiet
 implicit none
 character(len=*), intent(in) :: functional
 character(len=512) :: buf
@@ -1044,11 +1141,9 @@ if (len_trim(buf) > 0) then
    endif
 else
    call get_environment_variable("ENGINE_XC_USE_THEORY_TABLE", buf)
-   if (len_trim(buf) > 0) then
-      xcgrid_use_theory_table = (trim(adjustl(buf)) == "1")
-   else
-      xcgrid_use_theory_table = xcgrid_theory_default_on(functional)
-   endif
+   if (trim(adjustl(buf)) == "0") &
+      print '(A)', " ENGINE_XC_USE_THEORY_TABLE=0 ignored: the classic L1-L7 grids are retired"
+   xcgrid_use_theory_table = .true.
    if (xcgrid_use_theory_table) then
       call get_environment_variable("ENGINE_XC_THEORY_LEVEL", buf)
       level_auto_detected = (len_trim(buf) == 0)
@@ -1059,7 +1154,7 @@ else
       endif
       call get_environment_variable("ENGINE_XC_THEORY_TIER", buf)
       xcgrid_theory_tier = xcgrid_tier_from_str(buf)
-      print '(A)', " XC grid: "//trim(xcgrid_lvl_name(xcgrid_theory_level))//" table, "// &
+      if (.not. engine_quiet) print '(A)', " XC grid: "//trim(xcgrid_lvl_name(xcgrid_theory_level))//" table, "// &
          trim(xcgrid_tier_name(xcgrid_theory_tier))//" tier"
       call get_environment_variable("ENGINE_XC_THEORY_DYNAMIC", buf)
       xcgrid_theory_dynamic = (len_trim(buf) > 0 .and. trim(adjustl(buf)) == "1")

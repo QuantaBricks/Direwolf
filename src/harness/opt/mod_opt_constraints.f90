@@ -37,12 +37,12 @@ logical function cons_active()
 cons_active = (nfrozen > 0 .or. ncon > 0)
 end function cons_active
 
-subroutine cons_init(freeze_str, cons_str, nat, g3, out_unit, ok)
-character(len=*), intent(in) :: freeze_str, cons_str
+subroutine cons_init(cons_str, nat, g3, out_unit, ok)
+character(len=*), intent(in) :: cons_str
 integer, intent(in) :: nat, out_unit
 real(8), intent(in) :: g3(3,nat)
 logical, intent(out) :: ok
-integer :: i, p, q, a, b, ios, nf, ntok, k, ia(4)
+integer :: i, p, q, ios, nf, ntok, k, ia(4)
 character(len=len(cons_str)) :: item
 logical :: isfrozen(nat)
 character(len=32) :: tok(8)
@@ -53,50 +53,7 @@ nfrozen = 0 ; ncon = 0
 if (allocated(frozen)) deallocate(frozen, x0)
 if (allocated(V)) deallocate(V)
 nv = 0
-
 isfrozen = .false.
-item = freeze_str
-do i = 1, len_trim(item)
-   if (item(i:i) == ',') item(i:i) = ' '
-enddo
-p = 1
-do while (p <= len_trim(item))
-   do while (p <= len_trim(item))
-      if (item(p:p) /= ' ') exit
-      p = p + 1
-   enddo
-   if (p > len_trim(item)) exit
-   q = p
-   do while (q <= len_trim(item))
-      if (item(q:q) == ' ') exit
-      q = q + 1
-   enddo
-   k = index(item(p:q-1), '-')
-   if (k > 0) then
-      read(item(p:p+k-2), *, iostat=ios) a
-      if (ios == 0) read(item(p+k:q-1), *, iostat=ios) b
-   else
-      read(item(p:q-1), *, iostat=ios) a
-      b = a
-   endif
-   if (ios /= 0 .or. a < 1 .or. b > nat .or. a > b) then
-      write(out_unit,'(A)') '[OPT] opt_freeze: cannot read "'//item(p:q-1)//'"'
-      ok = .false. ; return
-   endif
-   isfrozen(a:b) = .true.
-   p = q
-enddo
-nf = count(isfrozen)
-if (nf > 0) then
-   allocate(frozen(nf), x0(3,nf))
-   k = 0
-   do i = 1, nat
-      if (isfrozen(i)) then
-         k = k + 1 ; frozen(k) = i ; x0(:,k) = g3(:,i)
-      endif
-   enddo
-   nfrozen = nf
-endif
 
 p = 1
 do while (p <= len_trim(cons_str))
@@ -109,6 +66,17 @@ do while (p <= len_trim(cons_str))
       p = p + q
    endif
    if (len_trim(item) == 0) cycle
+   item = adjustl(item)
+   if (lower(item(1:5)) == 'atoms' .and. (len_trim(item) == 5 .or. item(6:6) == ' ')) then
+      call mark_atoms(item(6:), nat, isfrozen, out_unit, ok)
+      if (.not. ok) return
+      cycle
+   endif
+   if (lower(item(1:6)) == 'freeze' .and. (len_trim(item) == 6 .or. item(7:7) == ' ')) then
+      call mark_atoms(item(7:), nat, isfrozen, out_unit, ok)
+      if (.not. ok) return
+      cycle
+   endif
    tok = ''
    ntok = 0
    call split_words(item, tok, ntok)
@@ -117,7 +85,7 @@ do while (p <= len_trim(cons_str))
    case ('angle');    k = 3
    case ('dihedral'); k = 4
    case default
-      write(out_unit,'(A)') '[OPT] opt_constraints: unknown item "'//trim(item)//'"'
+      write(out_unit,'(A)') '[OPT] opt_constraints: unknown item (atoms/bond/angle/dihedral) "'//trim(item)//'"'
       ok = .false. ; return
    end select
    if (ntok < 1 + k) then
@@ -154,13 +122,65 @@ do while (p <= len_trim(cons_str))
       endif
    endif
 enddo
-if (nfrozen > 0) write(out_unit,'(A,I0,A)') '[OPT]  frozen atoms: ', nfrozen, ' (opt_freeze)'
+nf = count(isfrozen)
+if (nf > 0) then
+   allocate(frozen(nf), x0(3,nf))
+   k = 0
+   do i = 1, nat
+      if (isfrozen(i)) then
+         k = k + 1 ; frozen(k) = i ; x0(:,k) = g3(:,i)
+      endif
+   enddo
+   nfrozen = nf
+endif
+if (nfrozen > 0) write(out_unit,'(A,I0,A)') '[OPT]  frozen atoms: ', nfrozen, ' (atoms)'
 do i = 1, ncon
    write(atoms_str,'(4(I0,1X))') cat(1:ckind(i),i)
    write(out_unit,'(A,I0,A,A,A,F10.4,A,F10.4)') '[OPT]  constraint ', i, ': ', &
         trim(kname(ckind(i)))//' '//trim(atoms_str), '   start ', shown(i, cref(i)), '   target ', shown(i, cfinal(i))
 enddo
 end subroutine cons_init
+
+subroutine mark_atoms(str, nat, flags, out_unit, ok)
+character(len=*), intent(in) :: str
+integer, intent(in) :: nat, out_unit
+logical, intent(inout) :: flags(nat)
+logical, intent(out) :: ok
+character(len=len(str)) :: item
+integer :: i, p, q, k, a, b, ios
+ok = .true.
+item = str
+do i = 1, len_trim(item)
+   if (item(i:i) == ',') item(i:i) = ' '
+enddo
+p = 1
+do while (p <= len_trim(item))
+   do while (p <= len_trim(item))
+      if (item(p:p) /= ' ') exit
+      p = p + 1
+   enddo
+   if (p > len_trim(item)) exit
+   q = p
+   do while (q <= len_trim(item))
+      if (item(q:q) == ' ') exit
+      q = q + 1
+   enddo
+   k = index(item(p:q-1), '-')
+   if (k > 0) then
+      read(item(p:p+k-2), *, iostat=ios) a
+      if (ios == 0) read(item(p+k:q-1), *, iostat=ios) b
+   else
+      read(item(p:q-1), *, iostat=ios) a
+      b = a
+   endif
+   if (ios /= 0 .or. a < 1 .or. b > nat .or. a > b) then
+      write(out_unit,'(A)') '[OPT] atoms: cannot read "'//item(p:q-1)//'"'
+      ok = .false. ; return
+   endif
+   flags(a:b) = .true.
+   p = q
+enddo
+end subroutine mark_atoms
 
 character(len=8) function kname(k)
 integer, intent(in) :: k

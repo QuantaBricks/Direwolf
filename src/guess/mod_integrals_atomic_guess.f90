@@ -340,9 +340,9 @@ Feff = Hcore_l
 
 block
    real(8),allocatable :: X_l(:,:)
-   real(8),allocatable :: diis_Fa(:,:,:), diis_Fb(:,:,:)
-   real(4),allocatable :: diis_Pa(:,:,:), diis_Pb(:,:,:)
-   real(4),allocatable :: diis_ea(:,:,:), diis_eb(:,:,:)
+   real(8),allocatable :: diis_Fa(:,:), diis_Fb(:,:)
+   real(4),allocatable :: diis_Pa(:,:), diis_Pb(:,:)
+   real(4),allocatable :: diis_ea(:,:), diis_eb(:,:)
    integer :: DIIS_MAXl, diis_nl, multi_l
    logical :: diis_active_l
 
@@ -365,9 +365,9 @@ block
    end block
 
    DIIS_MAXl = min(8,cnt)
-   allocate(diis_Fa(cnt,cnt,DIIS_MAXl), diis_Fb(cnt,cnt,DIIS_MAXl))
-   allocate(diis_Pa(cnt,cnt,DIIS_MAXl), diis_Pb(cnt,cnt,DIIS_MAXl))
-   allocate(diis_ea(cnt,cnt,DIIS_MAXl), diis_eb(cnt,cnt,DIIS_MAXl))
+   allocate(diis_Fa(cnt*(cnt+1)/2,DIIS_MAXl), diis_Fb(cnt*(cnt+1)/2,DIIS_MAXl))
+   allocate(diis_Pa(cnt*(cnt+1)/2,DIIS_MAXl), diis_Pb(cnt*(cnt+1)/2,DIIS_MAXl))
+   allocate(diis_ea(cnt*(cnt+1)/2,DIIS_MAXl), diis_eb(cnt*(cnt+1)/2,DIIS_MAXl))
    diis_nl = 0
    multi_l = merge(1,3,closed_pairing)
 

@@ -15,6 +15,6 @@ H    0.0000   -0.7700   -0.4800
 &end
 
 &opt
- opt_hess = 'xtb'           ! xtb Hessian at the first step, same geometry/charge/spin
- opt_xtb_method = 'gfn2'     ! 'gfn2' | 'gfn1' | 'gfn0' | 'gfnff'
+ hessian = 'xtb'           ! xtb Hessian at the first step, same geometry/charge/spin
+ xtb_method = 'gfn2'     ! 'gfn2' | 'gfn1' | 'gfn0' | 'gfnff'
 &end

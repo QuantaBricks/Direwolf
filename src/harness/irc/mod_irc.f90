@@ -4,15 +4,14 @@
 ! Intrinsic reaction coordinate (IRC) for the Direwolf harness.
 
 module mod_irc
-use mod_engine_input_types, only: engine_input_t
+use mod_engine_input_types, only: engine_input_t, spec_tddft_cube
 use mod_engineup_interface, only: EngineUp
+use mod_json_out, only: json_irc_start, json_irc_point, json_irc_end, json_flush
 use mod_hessian_freq, only: atomic_mass
-use mod_integrals, only: mayer_request, mayer_bo
+use mod_engine_options, only: engine_options_t, engine_output_stem
 use mod_opt_hessian, only: ANG2BOHR, BOHR2ANG, hessian_analytic, remove_file
 use mod_opt_ts, only: bofill_update
 use mod_engine_input_elements, only: elem_to_name
-use GRID_info, only: force_dense_allow
-use MOL_info, only: engine_quiet
 implicit none
 private
 public :: irc_run
@@ -40,6 +39,8 @@ integer, intent(in)                 :: out_unit
 integer :: nat, n, i, maxp, nf, nb
 real(8), allocatable :: x_ts(:,:), g_ts(:), Hy_ts(:,:), v(:), sm(:)
 real(8), allocatable :: Xf(:,:), Ef(:), Sf(:), Gf(:), Xb(:,:), Eb(:), Sb(:), Gb(:)
+integer :: kk
+character(len=300) :: cstem
 real(8) :: E_ts, ds0, lam, freq_cm
 integer :: npair
 real(8), allocatable :: bo_last(:), bo_ts(:)
@@ -53,6 +54,7 @@ integer, allocatable :: atomchg_a(:)
 real(8), allocatable :: coord_a(:,:), force_out(:,:), MLcharge_out(:)
 real(8), allocatable :: pc_charge_a(:), pc_coord_a(:,:)
 real(8), allocatable :: dens_in_a(:,:), dens_in_b(:,:), dens_out_a(:,:), dens_out_b(:,:)
+type(engine_options_t) :: opts
 integer :: iconv, n_hess_calls, n_eg_calls
 real(8) :: energy_out, econv, mem_grid_gb, mem_2e_gb
 
@@ -65,7 +67,10 @@ n_eg_calls = 0
 npair = nat*(nat-1)/2
 allocate(bo_last(npair), bo_ts(npair))
 bo_last = 0.0d0
-mayer_request = .true.
+opts%mayer = .true.
+opts%verbose = spec%verbose
+opts%resp_charges = spec%resp_charges_on
+opts%cosmo_cpcm = trim(spec%cosmo_convention) == 'cpcm'
 
 dirn = lower16(spec%irc_direction)
 if (len_trim(dirn) == 0) dirn = 'both'
@@ -84,8 +89,8 @@ endif
 do_fwd = (trim(dirn) == 'both' .or. trim(dirn) == 'forward')
 do_bwd = (trim(dirn) == 'both' .or. trim(dirn) == 'backward')
 
-engine_quiet = .true.
-force_dense_allow = .false.
+opts%quiet = .true.
+opts%force_dense_allow = .false.
 
 allocate(atomchg_a(nat), coord_a(nat,3), force_out(nat,3), MLcharge_out(nat))
 allocate(pc_charge_a(1), pc_coord_a(1,3))
@@ -122,7 +127,6 @@ call eg(x_ts, E_ts, g_ts, ok)
 bo_ts = bo_last
 if (.not. ok) then
    write(out_unit,'(A)') '[IRCFAILED]  SCF did not converge at the transition state'
-   call restore_state()
    return
 endif
 block
@@ -131,7 +135,6 @@ block
    call hes(x_ts, Hc, ok)
    if (.not. ok) then
       write(out_unit,'(A)') '[IRCFAILED]  the analytic Hessian at the transition state could not be obtained'
-      call restore_state()
       return
    endif
    call to_mass_weighted_hessian(Hc, Hy_ts)
@@ -142,7 +145,6 @@ Uv = Hy_ts
 call eigen(n, Uv, lamv, ok)
 if (.not. ok) then
    write(out_unit,'(A)') '[IRCFAILED]  Hessian diagonalization failed'
-   call restore_state()
    return
 endif
 nneg = count(lamv < NEG_EIG)
@@ -154,12 +156,12 @@ write(out_unit,'(A,F18.9)')  '  E(TS)                = ', E_ts
 write(out_unit,'(A,F10.2,A)') '  lowest mode          = ', freq_cm, ' cm-1  (negative = imaginary)'
 write(out_unit,'(A,I0)')     '  imaginary modes      = ', nneg
 write(out_unit,'(A,ES10.2)') '  gradient max (TS)    = ', maxval(abs(g_ts))
+call json_irc_start(E_ts, freq_cm, nneg)
 write(out_unit,'(A)') '[IRCSTARTEND]'
 write(out_unit,'(A)') ''
 if (nneg /= 1) then
    write(out_unit,'(A,I0,A)') '[IRCFAILED]  the structure has ', nneg, &
         ' imaginary modes, a transition state has exactly one - optimize it with opt_ts first'
-   call restore_state()
    return
 endif
 v = Uv(:, imode)
@@ -171,14 +173,84 @@ if (do_bwd) call walk(-1.0d0, 'backward', Xb, Eb, Sb, Gb, nb, reason_b)
 
 call write_summary()
 call write_path_files()
-call restore_state()
 
+if (spec%tddft_nroots > 0 .or. len_trim(spec%cube) > 0) then
+   if (do_fwd .and. nf >= 1) then
+      call eg_frame(Xf(:,nf), engine_output_stem(outfile), .true.)
+   elseif (do_bwd .and. nb >= 1) then
+      call eg_frame(Xb(:,nb), engine_output_stem(outfile), .true.)
+   endif
+endif
+
+if (index(spec%cube, 'all') > 0 .and. (index(spec%cube, 'den') > 0 .or. index(spec%cube, 'esp') > 0)) then
+   write(out_unit,'(A)') ''
+   write(out_unit,'(A)') '[CUBE] one more single point per IRC point for <base>.ts / .f<k> / .b<k> .den.cube / .esp.cube'
+   if (do_fwd .and. nf >= 1) then
+      call eg_frame(Xf(:,1), trim(engine_output_stem(outfile))//'.ts', .false.)
+   elseif (do_bwd .and. nb >= 1) then
+      call eg_frame(Xb(:,1), trim(engine_output_stem(outfile))//'.ts', .false.)
+   endif
+   if (do_fwd) then
+      do kk = 2, nf
+         write(cstem,'(A,A,I3.3)') trim(engine_output_stem(outfile)), '.f', kk-1
+         call eg_frame(Xf(:,kk), trim(cstem), .false.)
+      enddo
+   endif
+   if (do_bwd) then
+      do kk = 2, nb
+         write(cstem,'(A,A,I3.3)') trim(engine_output_stem(outfile)), '.b', kk-1
+         call eg_frame(Xb(:,kk), trim(cstem), .false.)
+      enddo
+   endif
+endif
 contains
 
-   subroutine restore_state()
-   engine_quiet = .false.
-   mayer_request = .false.
-   end subroutine restore_state
+   subroutine eg_frame(xv, stem, last)
+   real(8), intent(in) :: xv(n)
+   character(len=*), intent(in) :: stem
+   logical, intent(in) :: last
+   integer :: k
+   do k = 1, nat
+      coord_a(k,1) = xv(3*(k-1)+1) * BOHR2ANG
+      coord_a(k,2) = xv(3*(k-1)+2) * BOHR2ANG
+      coord_a(k,3) = xv(3*(k-1)+3) * BOHR2ANG
+   enddo
+   if (last) then
+      write(out_unit,'(A)') ''
+      write(out_unit,'(A)') '[LAST FRAME] TDDFT / cube files at the last IRC point'
+   endif
+   opts%quiet = .false.
+   opts%freq_unit = out_unit
+   opts%freq_mult = spec%imult
+   opts%freq_base = stem
+   opts%tddft_nroots = merge(spec%tddft_nroots, 0, last)
+   opts%tddft_cube = spec_tddft_cube(spec)
+   opts%cube_den = index(spec%cube, 'den') > 0 .or. index(spec%cube, 'DEN') > 0
+   opts%cube_esp = index(spec%cube, 'esp') > 0 .or. index(spec%cube, 'ESP') > 0
+   opts%cube_esp_exact = index(spec%cube, 'esp_exact') > 0 .or. index(spec%cube, 'ESP_EXACT') > 0
+   do
+   call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
+                 coord_a, atomchg_a, spec%baselabel, spec%ecplabel, &
+                 spec%atom_basis, spec%atom_ecp, &
+                 trim(spec%J), trim(spec%K), trim(spec%ri_aux_basis), spec%spherical, spec%harris_guess, &
+                 .false., spec%vv10_nonself, spec%mem_cap_gb, &
+                 .false., spec%n_threads, &
+                 spec%npc, pc_charge_a, pc_coord_a, &
+                 spec%molden_write, trim(spec%molden_file), spec%molden_read, trim(spec%molden_read_file), &
+                 spec%cosmo_on, spec%cosmo_epsilon, spec%cosmo_radii_scale, spec%cosmo_avg_area, spec%cosmo_sigma_rav, &
+                 trim(spec%cosmo_cavity_type), spec%cosmo_rsolv, spec%cosmo_ks_nseg, spec%cosmo_ks_nface, &
+                 trim(spec%cosmo_sigma_profile_file), &
+                 spec%cosmo_smd, trim(spec%cosmo_solvent), &
+                 force_out, energy_out, MLcharge_out, iconv, econv, &
+                 mem_grid_gb, mem_2e_gb, max(spec%scf_conv_level, 1), trim(spec%basedir), &
+                 dens_in_a, dens_in_b, dens_out_a, dens_out_b, opts)
+   if (.not. opts%uks_restart) exit
+   opts%uks_restart = .false.
+   opts%uks = .true.
+   call move_alloc(dens_out_a, dens_in_a)
+   call move_alloc(dens_out_b, dens_in_b)
+   enddo
+   end subroutine eg_frame
 
    subroutine eg(x3, E, g, okk)
    real(8), intent(in)  :: x3(3,nat)
@@ -190,6 +262,7 @@ contains
       coord_a(k,2) = x3(2,k) * BOHR2ANG
       coord_a(k,3) = x3(3,k) * BOHR2ANG
    enddo
+   do
    call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
                  coord_a, atomchg_a, spec%baselabel, spec%ecplabel, &
                  spec%atom_basis, spec%atom_ecp, &
@@ -204,20 +277,26 @@ contains
                  spec%cosmo_smd, trim(spec%cosmo_solvent), &
                  force_out, energy_out, MLcharge_out, iconv, econv, &
                  mem_grid_gb, mem_2e_gb, max(spec%scf_conv_level, 1), trim(spec%basedir), &
-                 dens_in_a, dens_in_b, dens_out_a, dens_out_b)
+                 dens_in_a, dens_in_b, dens_out_a, dens_out_b, opts)
+   if (.not. opts%uks_restart) exit
+   opts%uks_restart = .false.
+   opts%uks = .true.
+   call move_alloc(dens_out_a, dens_in_a)
+   call move_alloc(dens_out_b, dens_in_b)
+   enddo
    n_eg_calls = n_eg_calls + 1
    okk = (iconv == 1)
    if (.not. okk) return
    E = energy_out
    g = reshape(transpose(force_out), [n])
-   if (allocated(mayer_bo)) then
+   if (allocated(opts%mayer_bo)) then
       block
          integer :: ia, ib, ip
          ip = 0
          do ia = 1, nat
             do ib = ia+1, nat
                ip = ip + 1
-               bo_last(ip) = mayer_bo(ia,ib)
+               bo_last(ip) = opts%mayer_bo(ia,ib)
             enddo
          enddo
       end block
@@ -234,8 +313,7 @@ contains
    logical, intent(out) :: okk
    n_hess_calls = n_hess_calls + 1
    call hessian_analytic(spec, x3, nat, out_unit, max(spec%scf_conv_level, 1), &
-                         dens_in_a, dens_in_b, dens_out_a, dens_out_b, H, okk)
-   engine_quiet = .true.
+                         dens_in_a, dens_in_b, dens_out_a, dens_out_b, engine_output_stem(outfile), H, okk)
    end subroutine hes
 
    subroutine to_mass_weighted_hessian(Hc, Hy)
@@ -599,6 +677,13 @@ contains
            '   barrier ', (E_ts - Eb(nb))*HARTREE_TO_KCAL, ' kcal/mol'
    endif
    write(out_unit,'(A,I0,A,I0)') '  energy+gradient calls = ', n_eg_calls, '   analytic Hessians = ', n_hess_calls
+   block
+      character(len=32) :: jf, jbk
+      jf = 'not run' ; jbk = 'not run'
+      if (do_fwd) jf = reason_f
+      if (do_bwd) jbk = reason_b
+      call json_irc_end(trim(jf), trim(jbk), n_eg_calls, n_hess_calls)
+   end block
    write(out_unit,'(A)') '[IRCRESULTEND]'
    write(out_unit,'(A)') ''
    if (do_fwd .and. nf > 0) then
@@ -641,6 +726,7 @@ contains
       call frame(u, ud, Xf(:,k), Ef(k), Sf(k), Gf(k)) ; ntot = ntot + 1
    enddo
    close(u) ; close(ud)
+   call json_flush()
    write(out_unit,'(A)') '[IRCFILES]'
    write(out_unit,'(A,A,A,I0,A)') '  path        = ', trim(fx), '  (', ntot, ' frames, backward end to forward end)'
    write(out_unit,'(A,A)')        '  profile     = ', trim(fd)
@@ -659,6 +745,7 @@ contains
            xv(3*(a-1)+2)*BOHR2ANG, xv(3*(a-1)+3)*BOHR2ANG
    enddo
    write(ud,'(F12.4,F20.9,F14.4,ES14.3)') s, E, (E - E_ts)*HARTREE_TO_KCAL, gm
+   call json_irc_point(s, E, (E - E_ts)*HARTREE_TO_KCAL, gm, reshape(xv * BOHR2ANG, [3, nat]))
    end subroutine frame
 
 end subroutine irc_run

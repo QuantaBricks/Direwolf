@@ -6,6 +6,7 @@
 subroutine solHFR_KS(infor, Prms_prev, near_singular_S)
 use MOL_info
 use omp_lib, only: omp_get_max_threads
+use mod_gemm_big, only: gemm_big, level_shift_big
     implicit none
 INCLUDE 'parameter.h'
     interface
@@ -15,6 +16,7 @@ INCLUDE 'parameter.h'
        end subroutine openblas_set_num_threads
     end interface
     integer    :: i,j,k,l,n,m,start,info,infor
+    logical    :: diag_done
     integer    :: ij,kl
     integer    :: LWORK,LIWORK
     real(8),allocatable   ::  WORK(:)
@@ -61,25 +63,28 @@ INCLUDE 'parameter.h'
     if (apply_shift) then
        nvirt_a = nconts - n_alpha
        if (nvirt_a .gt. 0) then
+          if (.not. level_shift_big(nconts, nvirt_a, level_shift, S, C_a_prev(1,n_alpha+1), Fa, Tmp, C_a)) then
           allocate(SCv(nconts,nvirt_a))
           call DGEMM('N','N',nconts,nvirt_a,nconts,1.0d0,S,nconts, &
                      C_a_prev(1,n_alpha+1),nconts,0.0d0,SCv,nconts)
           call DGEMM('N','T',nconts,nconts,nvirt_a,level_shift,SCv,nconts, &
                      SCv,nconts,1.0d0,Fa,nconts)
           deallocate(SCv)
+          endif
        endif
     endif
-    call DGEMM('N','N',nconts,nconts,nconts,1.0d0,Fa,nconts,X,nconts,0.0d0,Tmp,nconts)
-    call DGEMM('T','N',nconts,nconts,nconts,1.0d0,X,nconts,Tmp,nconts,0.0d0,Fa,nconts)
+    call gemm_big('N','N',nconts,Fa,X,Tmp)
+    call gemm_big('T','N',nconts,X,Tmp,Fa)
     C_a = 0
     C_b = 0
 
     allocate(e1(nconts))
-    call DSYEVD('V','U',nconts,Fa,nconts,e1,WORK,LWORK,IWORK,LIWORK,INFO)
+    diag_done = .false.
+    if (.not. diag_done) call DSYEVD('V','U',nconts,Fa,nconts,e1,WORK,LWORK,IWORK,LIWORK,INFO)
     eLev_a = e1
     deallocate(e1)
 
-    call DGEMM('N','N',nconts,nconts,nconts,1.0d0,X,nconts,Fa,nconts,0.0d0,C_a,nconts)
+    call gemm_big('N','N',nconts,X,Fa,C_a)
 
     if(multi .eq. 1) then
         C_b = C_a
@@ -89,19 +94,22 @@ INCLUDE 'parameter.h'
         if (apply_shift) then
            nvirt_b = nconts - n_beta
            if (nvirt_b .gt. 0) then
+              if (.not. level_shift_big(nconts, nvirt_b, level_shift, S, C_b_prev(1,n_beta+1), Fb, Tmp, C_b)) then
               allocate(SCv(nconts,nvirt_b))
               call DGEMM('N','N',nconts,nvirt_b,nconts,1.0d0,S,nconts, &
                          C_b_prev(1,n_beta+1),nconts,0.0d0,SCv,nconts)
               call DGEMM('N','T',nconts,nconts,nvirt_b,level_shift,SCv,nconts, &
                          SCv,nconts,1.0d0,Fb,nconts)
               deallocate(SCv)
+              endif
            endif
         endif
-        call DGEMM('N','N',nconts,nconts,nconts,1.0d0,Fb,nconts,X,nconts,0.0d0,Tmp,nconts)
-        call DGEMM('T','N',nconts,nconts,nconts,1.0d0,X,nconts,Tmp,nconts,0.0d0,Fb,nconts)
-        call DSYEVD('V','U',nconts,Fb,nconts,e2,WORK,LWORK,IWORK,LIWORK,INFO)
+        call gemm_big('N','N',nconts,Fb,X,Tmp)
+        call gemm_big('T','N',nconts,X,Tmp,Fb)
+        diag_done = .false.
+        if (.not. diag_done) call DSYEVD('V','U',nconts,Fb,nconts,e2,WORK,LWORK,IWORK,LIWORK,INFO)
         eLev_b = e2
-        call DGEMM('N','N',nconts,nconts,nconts,1.0d0,X,nconts,Fb,nconts,0.0d0,C_b,nconts)
+        call gemm_big('N','N',nconts,X,Fb,C_b)
         deallocate(e2)
     endif
     if (apply_shift) deallocate(C_a_prev, C_b_prev)

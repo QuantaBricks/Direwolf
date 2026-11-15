@@ -9,7 +9,7 @@ use mod_version, only: engine_version
 use mod_xc, only: xc_write_references, xc_uses_vv10
 implicit none
 private
-public :: write_citations
+public :: write_citations, citations_bib_name
 
 integer, parameter :: MAXREF = 80
 type :: ref_t
@@ -349,6 +349,18 @@ write(u,'(A)') '  pages = {'//trim(r%pages)//'},'
 write(u,'(A)') '}'
 write(u,'(A)') ''
 end subroutine write_bib_entry
+
+function citations_bib_name(outfile) result(f)
+character(len=*), intent(in) :: outfile
+character(len=512) :: f
+integer :: l
+l = len_trim(outfile)
+if (l > 4 .and. outfile(max(1,l-3):l) == '.out') then
+   f = outfile(1:l-4)//'.bib'
+else
+   f = trim(outfile)//'.bib'
+endif
+end function citations_bib_name
 
 subroutine write_citations(spec, u, bibfile)
 type(engine_input_t), intent(in) :: spec

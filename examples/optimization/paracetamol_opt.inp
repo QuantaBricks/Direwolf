@@ -30,5 +30,5 @@ H         4.822230      -0.414820       3.032310
 &end
 
 &opt
- opt_coord = 'ric'
+ coord = 'ric'
 &end

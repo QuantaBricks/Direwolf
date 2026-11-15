@@ -4,23 +4,25 @@
 ! Geometry optimizer for the Direwolf harness.
 
 module mod_geomopt
-use mod_engine_input_types, only: engine_input_t
+use mod_engine_input_types, only: engine_input_t, spec_freq_pressure_pa, spec_tddft_cube
 use mod_engineup_interface, only: EngineUp
-use mod_hessian_freq, only: freq_unit, freq_mult, freq_base, freq_thermo
-use mod_integrals, only: freq_request, hessian_return, cosx_force_loose
-use GRID_info, only: force_dense_allow
+use mod_json_out, only: json_set_geometry, json_opt_status, json_opt_cycle
+use mod_engine_options, only: engine_options_t, engine_output_stem
 use mod_lindh_hessian, only: lindh_cart_hessian
-use mod_engine_results, only: write_results_block
+use mod_engine_results, only: write_results_block, finish_engine_call, report_progress
 use mod_engine_input_elements, only: elem_to_name
-use mod_scf_history, only: scf_hist_niter, scf_hist_last_prms, scf_hist_last_de
+use mod_output_format, only: print_distance_matrix
 use mod_internal_coords, only: ic_set_t, ic_build, ic_rebuild_if_changed, ic_nprim, &
                                 ic_values, ic_bmatrix, ic_ginv, ic_delta_q, &
                                 ic_grad_to_internal, ic_back_transform, ic_lindh_hessian, &
-                                ic_write, &
+                                ic_write, ic_print, &
                                 ic_rank
-use mod_internal_coords, only: ic_n_dropped
-use MOL_info, only: engine_quiet
+use mod_internal_coords, only: ic_n_dropped, ic_legacy_bridge
+use mod_opt_embed, only: embed_init, embed_evaluate, embed_reset, embed_prerelax, embed_prepare_micro
+use mod_opt_fragment, only: frag_init, frag_reset, frag_is_active, frag_nfrag, frag_expected_intra, &
+                            frag_rigid_step, frag_update, frag_trust_update, frag_trust_shrink, frag_trust_info, frag_set_model
 use mod_opt_ts, only: ts_on, ts_nneg, ts_vprev, TS_MAX_RECALC, ts_start, ts_forget_mode, &
+                      ts_follow_init, ts_follow_context, ts_abort, &
                       ts_endgame_refresh_due, ts_lost_mode_recalc_due, solve_prfo, bofill_update
 use mod_opt_hessian, only: ANG2BOHR, BOHR2ANG, read_ext_hessian, ric_model_hessian, &
                            cart_hessian_to_internal, ric_grad_curv, hessian_from_xtb, hessian_analytic, &
@@ -32,11 +34,22 @@ use mod_opt_min, only: regularize_hessian, ric_floor_hessian, bfgs_update, solve
 implicit none
 private
 public :: geomopt_run
+real(8), public, save :: geomopt_last_E = 0.0d0
+integer, public, save :: geomopt_last_ncyc = 0
+logical, public, save :: geomopt_last_ok = .false.
 
 real(8), parameter :: PROJ_SHIFT = 1.0d3
 
 real(8), parameter :: CONS_DEV_TOL = 2.0d-3
 integer, parameter :: MAXRETRY = 3
+logical, parameter :: EMBED_MACRO = .false.
+real(8), parameter :: EMBED_RELAX = 1.0d0
+integer, parameter :: EMBED_MAXMODEL = 80
+integer, parameter :: MAXMACRO = 8
+real(8), parameter :: MACRO_HANDOVER = 6.0d-3
+integer, parameter :: MAXMICRO = 40
+real(8), parameter :: MICRO_MAXDISP = 1.0d0
+real(8), parameter :: MACRO_RISE = 5.0d-5
 real(8), parameter :: E_REJECT = 1.0d-4
 real(8), parameter :: TRUST_SHRINK = 0.5d0
 real(8), parameter :: E_REJECT_NOISE = 1.0d-5
@@ -51,13 +64,22 @@ character(len=*), intent(in)        :: outfile
 integer, intent(in)                 :: out_unit
 
 integer :: nat, n, i, cyc, n_retry, ni, nrank, nexp
+logical :: cube_all
+character(len=300) :: cube_stem
 logical :: ext_hess_ok, hess_diag_on
 character(32) :: hd_env
 character(len=260) :: hessfile
 logical :: hess_restored, hess_exist
 integer :: hd_stat
 real(8), allocatable :: Hext(:,:)
-logical :: ric, ric_have_prev, topo_changed
+logical :: ric, ric_have_prev, topo_changed, scf_fine_latched, frag_on, embed_on, embed_ok
+real(8) :: relax
+logical :: micro, have_full
+real(8), allocatable :: x_full_prev(:,:), xref_micro(:,:), gfull_mat(:,:), gmod(:,:)
+real(8) :: E_full_prev, dmx_full, drms_full
+integer :: nmicro, nrej_macro, ntot_micro_cyc, nmacro
+logical :: step_cart_conv
+real(8) :: ratio_grow
 real(8) :: t_gmax, t_grms, t_smax, t_srms, t_de
 logical :: scf_adapt
 logical :: hess_fresh, want_hess_now, hok
@@ -79,6 +101,10 @@ real(8), parameter :: SCF_ADAPT_GMAX = 1.0d-3
 logical, parameter :: COSX_FORCE_LOOSE_EARLY = .false.
 real(8) :: trust, trust_min, trust_max
 real(8) :: E, E_old, dE, gmax, grms, smax, srms, sn, pred, pred_prev, ared, ratio
+real(8) :: E_best
+real(8), allocatable :: g3_best(:,:), force_best(:,:)
+logical :: have_best
+integer :: cyc_best
 logical :: converged, have_prev, did_restart
 
 real(8), allocatable :: g3(:,:), g3_prev(:,:)
@@ -94,20 +120,37 @@ integer, allocatable :: atomchg_a(:)
 real(8), allocatable :: coord_a(:,:), force_out(:,:), MLcharge_out(:)
 real(8), allocatable :: pc_charge_a(:), pc_coord_a(:,:)
 real(8), allocatable :: dens_in_a(:,:), dens_in_b(:,:), dens_out_a(:,:), dens_out_b(:,:)
+type(engine_options_t) :: opts
 integer :: iconv
 real(8) :: energy_out, econv, mem_grid_gb, mem_2e_gb
 
 nat = spec%ncenters
 n   = 3 * nat
 call ts_start(spec%opt_ts)
+embed_on = .false.
+micro = .not. EMBED_MACRO ; have_full = .false. ; nmicro = 0 ; nrej_macro = 0 ; E_full_prev = 0.0d0 ; nmacro = 0
 ric = (trim(spec%opt_coord) == 'ric') .or. (trim(spec%opt_coord) == 'internal') &
       .or. (trim(spec%opt_coord) == 'redundant')
 
-engine_quiet = .true.
+opts%quiet = .true.
+cube_all = index(spec%cube, 'all') > 0 .and. (index(spec%cube, 'den') > 0 .or. index(spec%cube, 'esp') > 0)
+if (cube_all) then
+   opts%cube_every = .true.
+   opts%cube_den = index(spec%cube, 'den') > 0
+   opts%cube_esp = index(spec%cube, 'esp') > 0
+   opts%cube_esp_exact = index(spec%cube, 'esp_exact') > 0
+   write(out_unit,'(A)') '[CUBE] every optimization cycle writes <base>.c<cycle>.den.cube / .esp.cube;'
+   write(out_unit,'(A)') '       a drug-sized molecule: tens of MB and seconds per file, esp_exact with RI-J minutes per cycle'
+endif
+opts%verbose = spec%verbose
+opts%resp_charges = spec%resp_charges_on
+opts%cosmo_cpcm = trim(spec%cosmo_convention) == 'cpcm'
+opts%progress => report_progress
 
-force_dense_allow = .false.
+opts%force_dense_allow = .false.
 
-allocate(g3(3,nat), g3_prev(3,nat))
+allocate(g3(3,nat), g3_prev(3,nat), g3_best(3,nat), force_best(nat,3))
+have_best = .false. ; E_best = 0.0d0 ; cyc_best = 0
 allocate(grad(n), grad_old(n), delta(n), step_prev(n), gproj(n))
 allocate(atomchg_a(nat), coord_a(nat,3), force_out(nat,3), MLcharge_out(nat))
 allocate(pc_charge_a(max(spec%npc,1)), pc_coord_a(max(spec%npc,1),3))
@@ -151,6 +194,22 @@ if (spec%opt_conv_level .ge. 1 .and. spec%scf_conv_level .lt. 2) then
       '[OPT]  opt_conv=tight -> SCF convergence raised to tight'
 endif
 
+block
+   character(len=8) :: sc_env
+   call get_environment_variable("ENGINE_OPT_STEP_CART", sc_env)
+   step_cart_conv = len_trim(sc_env) > 0 .and. trim(sc_env) /= '0'
+end block
+ratio_grow = 0.75d0
+block
+   character(len=16) :: rg_env
+   integer :: rg_ios
+   real(8) :: rg_val
+   call get_environment_variable("ENGINE_OPT_RGROW", rg_env)
+   if (len_trim(rg_env) > 0) then
+      read(rg_env, *, iostat=rg_ios) rg_val
+      if (rg_ios == 0) ratio_grow = rg_val
+   endif
+end block
 trust     = spec%opt_trust
 trust_min = 5.0d-2
 trust_max = max(spec%opt_trust, 3.0d-1) * 2.0d0
@@ -169,10 +228,17 @@ endif
 g3 = g3 * ANG2BOHR
 block
    logical :: cons_ok
-   call cons_init(spec%opt_freeze, spec%opt_constraints, nat, g3, out_unit, cons_ok)
+   call cons_init(spec%opt_constraints, nat, g3, out_unit, cons_ok)
    if (.not. cons_ok) then
-      call finish(spec, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+      call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
       return
+   endif
+   if (spec%opt_ts) then
+      call ts_follow_init(spec%opt_ts_follow, nat, out_unit, cons_ok)
+      if (.not. cons_ok) then
+         call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+         return
+      endif
    endif
 end block
 
@@ -183,7 +249,49 @@ else
 endif
 
 if (ric) then
+   frag_on = .false.
+   if (spec%opt_fragment) write(out_unit,'(A)') &
+      '[OPT]  fragment = true is shelved (the start geometry is prepared before the optimizer) - ignored'
+   ic_legacy_bridge = .not. frag_on
    call ic_build(ic, nat, spec%atomchg, g3)
+   call frag_reset()
+   if (frag_on) call frag_init(nat, ic%nbond, ic%bond)
+   embed_on = .false.
+   if (spec%opt_fragopts(1)) write(out_unit,'(A)') &
+      '[OPT]  frg_embed is shelved (no gain measured against the all-atom optimization) - ignored'
+   if (.false.) then
+      if (.not. frag_is_active()) then
+         write(out_unit,'(A)') '[OPT]  ERROR: embed = true needs fragment = true and at least two covalent fragments'
+         call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+         return
+      endif
+      if (spec%cosmo_on) then
+         write(out_unit,'(A)') '[OPT]  ERROR: embed = true is not available with a solvent model'
+         call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+         return
+      endif
+      call embed_init(spec, nat, out_unit, embed_ok, .true.)
+      if (.not. embed_ok) then
+         call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+         return
+      endif
+      embed_on = .true.
+   endif
+   if (frag_is_active()) write(out_unit,'(A,I0,A,I0,A)') '[OPT]  fragments: ', frag_nfrag(), &
+        ' covalent fragments, ', 6*frag_nfrag(), ' rigid-body coordinates, decoupled from the internal ones'
+   if (frag_is_active() .and. spec%opt_fragopts(2) .and. .not. spec%cosmo_on) then
+      embed_ok = embed_on
+      if (.not. embed_on) call embed_init(spec, nat, out_unit, embed_ok, .false.)
+      if (embed_ok) then
+         call embed_prerelax(spec, opts, atomchg_a, 0, nat, g3, out_unit)
+         call ic_build(ic, nat, spec%atomchg, g3)
+      else
+         write(out_unit,'(A)') '[PRERELAX]  skipped: the fragment charges/multiplicities do not fit (see above)'
+      endif
+      if (.not. embed_on) then
+         opts%esp_charges = .false. ; opts%pc_grad_request = .false.
+      endif
+   endif
    ni = ic_nprim(ic)
    if (ni < 1) then
       write(out_unit,'(A)') '[OPT] no internal coordinates generated - falling back to cart'
@@ -194,6 +302,7 @@ endif
 if (ric) then
    nexp = 3*nat - merge(5, 6, is_linear(nat, g3))
    if (nat < 3) nexp = max(3*nat - 5, 1)
+   if (frag_is_active()) nexp = frag_expected_intra(nat, g3)
    nrank = ic_rank(ic, g3)
    if (nrank < nexp) then
       write(out_unit,'(A,I0,A,I0,A)') &
@@ -207,10 +316,10 @@ if (ric) then
       ' - the coordinate set may be incomplete'
 endif
 
-call get_environment_variable("DIREWOLF_OPT_HESS_DIAG", hd_env, status=hd_stat)
+call get_environment_variable("ENGINE_OPT_HESS_DIAG", hd_env, status=hd_stat)
 hess_diag_on = (hd_stat == 0)
 ged_m = 0
-call get_environment_variable("DIREWOLF_OPT_GEDIIS", ged_env)
+call get_environment_variable("ENGINE_OPT_GEDIIS", ged_env)
 if (len_trim(ged_env) > 0) read(ged_env, *, iostat=ged_ios) ged_m
 ged_m = max(0, min(ged_m, 12))
 ged_nh = 0
@@ -227,24 +336,27 @@ else
    call remove_file(hessfile)
 endif
 hess_every = spec%opt_hess_every
-if (hess_every <= 0 .and. ts_on) hess_every = spec%opt_ts_hess_every
+if (hess_every < 0) then
+   hess_every = 0
+   if (hsrc0 == 'model') hsrc0 = 'calc'
+endif
 hsrc_re = lower8(spec%opt_hess_recalc)
 if (len_trim(hsrc_re) == 0) hsrc_re = merge('xtb ', 'calc', hsrc0 == 'xtb')
 if (hsrc0 /= 'model' .and. hsrc0 /= 'calc' .and. hsrc0 /= 'read' .and. hsrc0 /= 'xtb') then
    write(out_unit,'(A)') "[OPT]  ERROR: opt_hess = '"//trim(spec%opt_hess)// &
         "' - expected 'model', 'calc', 'read' or 'xtb'"
-   call finish(spec, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+   call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
    return
 endif
 if (hsrc_re /= 'calc' .and. hsrc_re /= 'xtb') then
    write(out_unit,'(A)') "[OPT]  ERROR: opt_hess_recalc = '"//trim(spec%opt_hess_recalc)// &
         "' - expected 'calc' or 'xtb'"
-   call finish(spec, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+   call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
    return
 endif
 if (hsrc0 == 'read' .and. len_trim(spec%opt_hessian_file) == 0) then
    write(out_unit,'(A)') "[OPT]  ERROR: opt_hess = 'read' needs opt_hessian_file"
-   call finish(spec, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+   call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
    return
 endif
 n_hess_calls = 0
@@ -279,7 +391,7 @@ case ('calc', 'xtb')
 end select
 if (ts_on .and. .not. ext_hess_ok) then
    write(out_unit,'(A)') '[OPT]  the Hessian could not be obtained - transition-state search aborted'
-   call finish(spec, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
+   call finish(spec, opts, g3, nat, out_unit, .false., 0, 0.0d0, force_out, 0)
    return
 endif
 if (ts_on) write(out_unit,'(A)') '[OPT]  TS search (P-RFO), start Hessian: '//trim(hsrc0)
@@ -312,6 +424,7 @@ have_prev     = .false.
 ric_have_prev = .false.
 hess_fresh    = .false.
 scf_lvl_prev  = -1
+scf_fine_latched = .false.
 lvl_switch    = .false.
 converged     = .false.
 n_retry       = 0
@@ -326,11 +439,33 @@ do cyc = 1, spec%opt_maxcyc
       coord_a(i,3) = g3(3,i) * BOHR2ANG
    enddo
 
+   block
+      character(len=2) :: dsym(nat)
+      integer :: ids
+      character(len=16) :: ctitle
+      do ids = 1, nat
+         dsym(ids) = elem_to_name(spec%atomchg(ids))
+      enddo
+      write(ctitle,'(A,I0)') 'cycle ', cyc
+      call print_distance_matrix(out_unit, nat, dsym, g3 * BOHR2ANG)
+      if (ric) call ic_print(ic, g3, out_unit, trim(ctitle))
+   end block
+
    scf_lvl = spec%scf_conv_level
-   if (scf_adapt .and. (cyc .eq. 1 .or. gmax .gt. SCF_ADAPT_GMAX)) scf_lvl = 0
+   if (cyc .gt. 1 .and. gmax .le. SCF_ADAPT_GMAX) scf_fine_latched = .true.
+   if (scf_adapt .and. .not. scf_fine_latched .and. (cyc .eq. 1 .or. gmax .gt. SCF_ADAPT_GMAX)) scf_lvl = 0
    lvl_switch = (cyc .gt. 1 .and. scf_lvl .ne. scf_lvl_prev)
    scf_lvl_prev = scf_lvl
-   cosx_force_loose = COSX_FORCE_LOOSE_EARLY .and. (scf_lvl .eq. 0) .and. scf_adapt
+   opts%cosx_force_loose = COSX_FORCE_LOOSE_EARLY .and. (scf_lvl .eq. 0) .and. scf_adapt
+   opts%cosx_hi_reconverge = scf_fine_latched
+   if (cube_all) then
+      write(cube_stem,'(A,A,I3.3)') trim(engine_output_stem(outfile)), '.c', cyc
+      opts%freq_base = trim(cube_stem)
+   endif
+   if (embed_on .and. micro) then
+      call embed_evaluate(spec, opts, coord_a, atomchg_a, scf_lvl, cyc, out_unit, energy_out, force_out, iconv)
+   else
+   do
    call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
                  coord_a, atomchg_a, spec%baselabel, spec%ecplabel, &
                  spec%atom_basis, spec%atom_ecp, &
@@ -345,12 +480,19 @@ do cyc = 1, spec%opt_maxcyc
                  spec%cosmo_smd, trim(spec%cosmo_solvent), &
                  force_out, energy_out, MLcharge_out, iconv, econv, &
                  mem_grid_gb, mem_2e_gb, scf_lvl, trim(spec%basedir), &
-                 dens_in_a, dens_in_b, dens_out_a, dens_out_b)
+                 dens_in_a, dens_in_b, dens_out_a, dens_out_b, opts)
+   if (.not. opts%uks_restart) exit
+   opts%uks_restart = .false.
+   opts%uks = .true.
+   call move_alloc(dens_out_a, dens_in_a)
+   call move_alloc(dens_out_b, dens_in_b)
+   enddo
+   endif
 
    if (iconv /= 1) then
       write(out_unit,'(A,I0,A)') '[OPTFAILED]  SCF did not converge at cycle ', cyc, &
            ' - aborting optimization'
-      call finish(spec, g3, nat, out_unit, .false., cyc, energy_out, force_out, iconv)
+      call finish(spec, opts, g3, nat, out_unit, .false., cyc, energy_out, force_out, iconv)
       return
    endif
 
@@ -405,6 +547,7 @@ do cyc = 1, spec%opt_maxcyc
       else
          ratio = -1.0d0
       endif
+      if (.not. ts_on) call frag_trust_update(ratio)
       if (ts_on) then
          if (ratio < 0.25d0 .or. ratio > 1.75d0) then
             trust = max(0.5d0 * sn, trust_min)
@@ -413,17 +556,29 @@ do cyc = 1, spec%opt_maxcyc
          endif
       else if (ratio < 0.25d0) then
          trust = max(TRUST_SHRINK * sn, trust_min)
-      else if (ratio > 0.75d0 .and. sn > 0.99d0*trust) then
+      else if (ratio > ratio_grow .and. sn > 0.99d0*trust) then
          trust = min(2.0d0 * trust, trust_max)
       endif
    endif
 
+   if (frag_is_active() .and. spec%verbose >= 2 .and. have_prev) then
+      block
+         real(8) :: trr, snrr
+         logical :: hitr
+         call frag_trust_info(trr, snrr, hitr)
+         write(out_unit,'(A,F7.3,A,F7.3,A,L1)') '  [rigid] trust = ', trr, '   last step = ', snrr, '   at boundary = ', hitr
+      end block
+   endif
    call write_cycle(out_unit, cyc, E, have_prev, E_old, gmax, grms, have_prev, smax, srms, trust, iconv, &
                     have_prev, ratio, sn)
-   call write_cycle_diag(out_unit, nat, spec%atomchg, grad)
+   call write_cycle_diag(out_unit, opts, nat, spec%atomchg, grad)
+   if (embed_on .and. micro) write(out_unit,'(A)') '  [model: frozen charges + gradient correction]'
+   if (embed_on .and. .not. micro) write(out_unit,'(A)') '  [all atoms, DFT]'
    call traj_append(trajfile, nat, spec%atomchg, g3, cyc, E, gmax)
+   call json_opt_cycle(cyc, E, gmax, grms, have_prev, smax, srms, trust, g3 * BOHR2ANG)
    if (spec%chk_write) call chk_write_safe(spec, dens_out_a, dens_out_b)
 
+   relax = 1.0d0
    if (have_prev) then
       dE = E - E_old
       converged = (gmax < t_gmax) .and. (grms < t_grms) .and. &
@@ -431,7 +586,85 @@ do cyc = 1, spec%opt_maxcyc
    else
       converged = (gmax < t_gmax) .and. (grms < t_grms)
    endif
+   if (embed_on .and. .not. micro) then
+      if (have_full) then
+         dmx_full = maxval(abs(g3 - x_full_prev))
+         drms_full = sqrt(sum((g3 - x_full_prev)**2) / n)
+         converged = (gmax < t_gmax) .and. (grms < t_grms) .and. &
+                     ( ((dmx_full < t_smax) .and. (drms_full < t_srms)) .or. (abs(E - E_full_prev) < t_de) )
+      else
+         converged = (gmax < t_gmax) .and. (grms < t_grms)
+      endif
+   endif
    if (converged .and. cons_active()) converged = (cons_max_dev(nat, g3) < CONS_DEV_TOL)
+   if (embed_on .and. micro .and. .not. EMBED_MACRO) then
+      relax = EMBED_RELAX
+      if (have_prev) then
+         converged = (gmax < relax*t_gmax) .and. (grms < relax*t_grms) .and. &
+                     ( ((smax < relax*t_smax) .and. (srms < relax*t_srms)) .or. (abs(E - E_old) < relax*t_de) )
+      else
+         converged = (gmax < relax*t_gmax) .and. (grms < relax*t_grms)
+      endif
+      if (.not. converged .and. cyc >= EMBED_MAXMODEL .and. gmax < 4.0d0*t_gmax .and. grms < 4.0d0*t_grms) converged = .true.
+      if (converged) then
+         write(out_unit,'(A,I0,A)') '  [embed] the model converged at cycle ', cyc, &
+              ' - continuing with all atoms as one system (DFT)'
+         embed_on = .false. ; micro = .false. ; converged = .false.
+         have_prev = .false. ; ric_have_prev = .false. ; hess_fresh = .false.
+         E_old = 0.0d0 ; pred_prev = 0.0d0 ; n_retry = 0
+         opts%esp_charges = .false. ; opts%pc_grad_request = .false.
+         cycle
+      endif
+   else if (embed_on .and. micro) then
+      nmicro = nmicro + 1
+      converged = .false.
+      if (((gmax < t_gmax) .and. (grms < t_grms) .and. have_prev .and. &
+           (((smax < t_smax) .and. (srms < t_srms)) .or. (abs(E - E_old) < t_de))) &
+          .or. nmicro >= MAXMICRO .or. maxval(abs(g3 - xref_micro)) > MICRO_MAXDISP) then
+         write(out_unit,'(A,I0,A,I0,A)') '  [micro] ', nmicro, ' model cycles; back to the all-atom DFT (cycle ', cyc + 1, ')'
+         micro = .false.
+         have_prev = .false. ; ric_have_prev = .false. ; hess_fresh = .false.
+         E_old = 0.0d0 ; pred_prev = 0.0d0 ; n_retry = 0
+         cycle
+      endif
+   else if (embed_on .and. EMBED_MACRO .and. .not. converged) then
+      if (have_full .and. E > E_full_prev + MACRO_RISE .and. nrej_macro < 3) then
+         nrej_macro = nrej_macro + 1
+         write(out_unit,'(A,ES9.2,A)') '  [macro] the all-atom energy rose by ', E - E_full_prev, &
+              ' - going back half way to the previous all-atom geometry'
+         g3 = x_full_prev + 0.5d0 * (g3 - x_full_prev)
+         have_prev = .false. ; ric_have_prev = .false. ; hess_fresh = .false.
+         E_old = 0.0d0 ; pred_prev = 0.0d0 ; n_retry = 0
+         cycle
+      endif
+      nrej_macro = 0
+      E_full_prev = E ; x_full_prev = g3 ; have_full = .true.
+      nmacro = nmacro + 1
+      if ((nmacro >= 3 .and. gmax < MACRO_HANDOVER) .or. nmacro >= MAXMACRO) then
+         write(out_unit,'(A,I0,A,ES9.2,A)') '  [macro] ', nmacro, ' all-atom evaluations, gmax = ', gmax, &
+              ' - the all-atom optimization takes over'
+         embed_on = .false.
+         have_prev = .false. ; ric_have_prev = .false. ; hess_fresh = .false.
+         E_old = 0.0d0 ; pred_prev = 0.0d0 ; n_retry = 0
+         opts%esp_charges = .false. ; opts%pc_grad_request = .false.
+      endif
+      if (embed_on) then
+      if (.not. allocated(gfull_mat)) allocate(gfull_mat(nat,3), gmod(nat,3), xref_micro(3,nat))
+      do i = 1, nat
+         gfull_mat(i,:) = grad(3*(i-1)+1:3*(i-1)+3)
+      enddo
+      call embed_prepare_micro(spec, opts, coord_a, atomchg_a, 0, gfull_mat, out_unit, iconv, gmod)
+      if (iconv /= 1) then
+         write(out_unit,'(A)') '  [embed] an SCF of the model did not converge - continuing with all atoms only'
+         embed_on = .false.
+      else
+         micro = .true. ; nmicro = 0 ; xref_micro = g3
+         have_prev = .false. ; ric_have_prev = .false. ; hess_fresh = .false.
+         E_old = 0.0d0 ; pred_prev = 0.0d0 ; n_retry = 0
+         cycle
+      endif
+      endif
+   endif
    if (converged) then
       write(out_unit,'(A)')       '[OPTCONVERGED]'
       write(out_unit,'(A,I0)')    '  cycles = ', cyc
@@ -443,7 +676,6 @@ do cyc = 1, spec%opt_maxcyc
             logical :: okchk
             allocate(Hchk(n,n), wchk(n), wkchk(66*n))
             call hess_get('calc', Hchk, okchk)
-            engine_quiet = .true.
             if (okchk) then
                Hchk = 0.5d0 * (Hchk + transpose(Hchk))
                if (.not. cons_has_frozen()) then
@@ -469,17 +701,37 @@ do cyc = 1, spec%opt_maxcyc
             endif
          end block
       endif
-      call finish(spec, g3, nat, out_unit, .true., cyc, E, force_out, iconv)
+      call finish(spec, opts, g3, nat, out_unit, .true., cyc, E, force_out, iconv)
       call profile_tail(out_unit)
-      if (spec%freq) then
-         if (spec%npc > 0) error stop 'freq=.true. with external point charges is not supported'
+      if (.not. embed_on .and. (spec%freq .or. spec%tddft_nroots > 0 .or. len_trim(spec%cube) > 0)) then
+         if (spec%freq .and. spec%npc > 0) error stop 'freq=.true. with external point charges is not supported'
          write(out_unit,'(A)') ''
-         write(out_unit,'(A)') '[FREQ] analytic Hessian at the optimized geometry'
-         freq_unit = out_unit
-         freq_mult = spec%imult
-         freq_request = .true.
+         if (spec%freq) then
+            write(out_unit,'(A)') '[FREQ] analytic Hessian at the optimized geometry'
+         else
+            write(out_unit,'(A)') '[LAST FRAME] TDDFT / cube files at the optimized geometry'
+         endif
+         opts%quiet = .false.
+         opts%cosx_force_loose = .false.
+         opts%freq_unit = out_unit
+         opts%freq_mult = spec%imult
+         opts%freq_temp = spec%freq_cond(1)
+         opts%freq_pres = spec_freq_pressure_pa(spec)
+         opts%freq_base = engine_output_stem(outfile)
+         opts%cube_every = .false.
+         opts%freq = spec%freq
+         opts%tddft_nroots = spec%tddft_nroots
+         opts%tddft_cube = spec_tddft_cube(spec)
+         opts%tddft_tda = spec%tddft_tda
+         opts%tddft_triplets = spec%tddft_triplets
+         opts%tddft_robust = spec%tddft_robust
+         opts%tddft_eps_opt = spec%tddft_eps_opt(1)
+         opts%cube_den = index(spec%cube, 'den') > 0 .or. index(spec%cube, 'DEN') > 0
+         opts%cube_esp = index(spec%cube, 'esp') > 0 .or. index(spec%cube, 'ESP') > 0
+         opts%cube_esp_exact = index(spec%cube, 'esp_exact') > 0 .or. index(spec%cube, 'ESP_EXACT') > 0
          call move_alloc(dens_out_a, dens_in_a)
          call move_alloc(dens_out_b, dens_in_b)
+         do
          call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
                        coord_a, atomchg_a, spec%baselabel, spec%ecplabel, &
                        spec%atom_basis, spec%atom_ecp, &
@@ -494,7 +746,14 @@ do cyc = 1, spec%opt_maxcyc
                        spec%cosmo_smd, trim(spec%cosmo_solvent), &
                        force_out, energy_out, MLcharge_out, iconv, econv, &
                        mem_grid_gb, mem_2e_gb, spec%scf_conv_level, trim(spec%basedir), &
-                       dens_in_a, dens_in_b, dens_out_a, dens_out_b)
+                       dens_in_a, dens_in_b, dens_out_a, dens_out_b, opts)
+         if (.not. opts%uks_restart) exit
+         opts%uks_restart = .false.
+         opts%uks = .true.
+         call move_alloc(dens_out_a, dens_in_a)
+         call move_alloc(dens_out_b, dens_in_b)
+         enddo
+         call finish_engine_call(opts, spec, outfile, out_unit)
       endif
       return
    endif
@@ -510,12 +769,13 @@ do cyc = 1, spec%opt_maxcyc
       grad  = grad_old
       E     = E_old
       trust = max(0.25d0 * sn, trust_min)
+      call frag_trust_shrink()
       if (ric) then
          call ic_bmatrix(ic, g3, Bmat)
          call ic_ginv(Bmat, ni, n, Ginvm)
          call dgemv('N', ni, n, 1.0d0, Bmat, ni, grad, 1, 0.0d0, bgv, 1)
          call dgemv('N', ni, ni, 1.0d0, Ginvm, ni, bgv, 1, 0.0d0, gq_cur, 1)
-         call ric_step(ic, nat, ni, g3, Bmat, Ginvm, gq_cur, Hq, trust, delta, pred, sn, out_unit)
+         call ric_step_f(ic, nat, ni, g3, Bmat, Ginvm, gq_cur, Hq, trust, delta, pred, sn, out_unit, g3_prev, grad)
       else
          call rfo_step(n, nat, Hx, grad, g3, trust, delta, pred, out_unit)
          sn = sqrt(sum(delta*delta))
@@ -556,6 +816,8 @@ do cyc = 1, spec%opt_maxcyc
       endif
       call ic_rebuild_if_changed(ic, nat, spec%atomchg, g3, topo_changed)
       if (topo_changed) then
+         if (frag_on) call frag_init(nat, ic%nbond, ic%bond)
+         if (frag_is_active()) call frag_set_model(nat, spec%atomchg, g3)
          ni = ic_nprim(ic)
          deallocate(Hq, q_prev, gq_prev, q_cur, sq, gq_cur, bgv)
          allocate(Hq(ni,ni), q_prev(ni), gq_prev(ni), q_cur(ni), sq(ni), gq_cur(ni), bgv(ni))
@@ -624,6 +886,7 @@ do cyc = 1, spec%opt_maxcyc
          call ic_values(ic, g3, q_cur)
          call ic_delta_q(ic, q_cur, q_prev, sq)
          call hess_update(ni, Hq, sq, gq_cur - gq_prev)
+         call frag_update(g3, grad)
       endif
       block
          real(8), allocatable :: Hs(:,:)
@@ -669,7 +932,7 @@ do cyc = 1, spec%opt_maxcyc
             deallocate(ged_dQ, ged_c, ged_qoff, ged_gstar)
          endif
       endif
-      if (.not. ged_used) call ric_step(ic, nat, ni, g3, Bmat, Ginvm, gq_cur, Hq, trust, delta, pred, sn, out_unit)
+      if (.not. ged_used) call ric_step_f(ic, nat, ni, g3, Bmat, Ginvm, gq_cur, Hq, trust, delta, pred, sn, out_unit, g3, grad)
       if (ts_lost_mode_recalc_due(hess_fresh, ts_nrecalc)) then
          allocate(Hnew(n,n))
          call hess_get(hsrc_re, Hnew, hok)
@@ -680,7 +943,7 @@ do cyc = 1, spec%opt_maxcyc
             hess_fresh = .true.
             call ts_forget_mode()
             write(out_unit,'(A,I0)') '  [ts] no negative curvature left - Hessian ('//trim(hsrc_re)//') recomputed at cycle ', cyc
-            call ric_step(ic, nat, ni, g3, Bmat, Ginvm, gq_cur, Hq, trust, delta, pred, sn, out_unit)
+            call ric_step_f(ic, nat, ni, g3, Bmat, Ginvm, gq_cur, Hq, trust, delta, pred, sn, out_unit, g3, grad)
          endif
          deallocate(Hnew)
          if (allocated(dens_out_a)) then
@@ -731,6 +994,15 @@ do cyc = 1, spec%opt_maxcyc
       sn = sqrt(sum(delta*delta))
    endif
 
+   if (ts_abort) then
+      write(out_unit,'(A)') '[OPTFAILED]  transition-state search stopped (see the [ts] message above)'
+      call finish(spec, opts, g3, nat, out_unit, .false., cyc, E, force_out, iconv)
+      return
+   endif
+
+   if (.not. have_best .or. E < E_best) then
+      have_best = .true. ; E_best = E ; g3_best = g3 ; force_best = force_out ; cyc_best = cyc
+   endif
    g3_prev   = g3
    E_old     = E
    grad_old  = grad
@@ -743,6 +1015,16 @@ do cyc = 1, spec%opt_maxcyc
    step_prev = delta
    smax = maxval(abs(delta))
    srms = sqrt(sum(delta*delta) / n)
+   if (ric .and. ric_have_prev .and. size(q_prev) == ic_nprim(ic) .and. .not. step_cart_conv) then
+      block
+         real(8), allocatable :: qn(:), dqs(:)
+         allocate(qn(ic_nprim(ic)), dqs(ic_nprim(ic)))
+         call ic_values(ic, g3, qn)
+         call ic_delta_q(ic, qn, q_prev, dqs)
+         smax = maxval(abs(dqs))
+         srms = sqrt(sum(dqs*dqs) / size(dqs))
+      end block
+   endif
    have_prev = .true.
 
    if (allocated(dens_out_a)) then
@@ -752,7 +1034,11 @@ do cyc = 1, spec%opt_maxcyc
 enddo
 
 write(out_unit,'(A,I0,A)') '[OPTFAILED]  not converged in ', spec%opt_maxcyc, ' cycles'
-call finish(spec, g3, nat, out_unit, .false., spec%opt_maxcyc, E, force_out, iconv)
+if (have_best) then
+   g3 = g3_best ; E = E_best ; force_out = force_best
+   write(out_unit,'(A,I0,A,F16.9)') '[OPT] reporting the lowest-energy geometry, cycle ', cyc_best, '  E = ', E_best
+endif
+call finish(spec, opts, g3, nat, out_unit, .false., spec%opt_maxcyc, E, force_out, iconv)
 
 contains
 
@@ -776,13 +1062,14 @@ if (trim(src) == 'xtb') then
    call hessian_from_xtb(spec, g3, nat, outfile, out_unit, (ts_on .or. ric), Hout, ok)
 else
    call hessian_analytic(spec, g3, nat, out_unit, max(spec%scf_conv_level, 1), &
-                         dens_in_a, dens_in_b, dens_out_a, dens_out_b, Hout, ok)
+                         dens_in_a, dens_in_b, dens_out_a, dens_out_b, engine_output_stem(outfile), Hout, ok)
 endif
 end subroutine hess_get
 
 end subroutine geomopt_run
 
-subroutine write_cycle_diag(u, nat, Z, grad)
+subroutine write_cycle_diag(u, opts, nat, Z, grad)
+type(engine_options_t), intent(in) :: opts
 integer, intent(in) :: u, nat, Z(nat)
 real(8), intent(in) :: grad(3*nat)
 integer :: i, k, ord(nat), tmp
@@ -800,8 +1087,8 @@ do k = 1, min(NTOP, nat)
       endif
    enddo
 enddo
-write(u,'(A,I0,A,ES10.3,A,ES10.3)') '  scf iters = ', scf_hist_niter(), &
-     '   scf dP = ', scf_hist_last_prms(), '   scf dE = ', scf_hist_last_de()
+write(u,'(A,I0,A,ES10.3,A,ES10.3)') '  scf iters = ', opts%scf_niter, &
+     '   scf dP = ', opts%scf_dP, '   scf dE = ', opts%scf_dE
 write(u,'(A)',advance='no') '  largest |g| on: '
 do k = 1, min(NTOP, nat)
    nm = elem_to_name(Z(ord(k)))
@@ -926,6 +1213,7 @@ do k = 1, ntr
 enddo
 call dgemv('N', n, n, 1.0d0, P, n, grad, 1, 0.0d0, gp, 1)
 
+call ts_follow_context(nat, coord3)
 call solve_step(n, Hp, gp, delta, out_unit)
 
 sn = sqrt(sum(delta*delta))
@@ -934,6 +1222,21 @@ if (sn > trust .and. sn > 0.0d0) delta = delta * (trust / sn)
 call dgemv('N', n, n, 1.0d0, Hp, n, delta, 1, 0.0d0, Hd, 1)
 pred = dot_product(gp, delta) + 0.5d0 * dot_product(delta, Hd)
 end subroutine rfo_step
+
+subroutine ric_step_f(ic, nat, ni, coord3, B, Ginv, gq, Hq, trust, dx, pred, qnorm, out_unit, coord_g, grad)
+type(ic_set_t), intent(in) :: ic
+integer, intent(in)  :: nat, ni, out_unit
+real(8), intent(in)  :: coord3(3,nat), B(ni,3*nat), Ginv(ni,ni), gq(ni)
+real(8), intent(in)  :: Hq(ni,ni), trust, coord_g(3,nat), grad(3*nat)
+real(8), intent(out) :: dx(3*nat), pred, qnorm
+real(8) :: dxr(3*nat), pred_r, snr
+call ric_step(ic, nat, ni, coord3, B, Ginv, gq, Hq, trust, dx, pred, qnorm, out_unit)
+if (.not. frag_is_active()) return
+call frag_rigid_step(coord_g, grad, coord3 + reshape(dx, [3,nat]), trust, dxr, pred_r, snr)
+dx = dx + dxr
+pred = pred + pred_r
+qnorm = max(qnorm, snr)
+end subroutine ric_step_f
 
 subroutine ric_step(ic, nat, ni, coord3, B, Ginv, gq, Hq, trust, dx, pred, qnorm, out_unit, dq_pre, e_off)
 type(ic_set_t), intent(in) :: ic
@@ -987,6 +1290,7 @@ if (nvc > 0) then
    endif
 endif
 
+call ts_follow_context(nat, coord3, ni, B, Ginv)
 call solve_step(ni, Hp, gp, dq, out_unit)
 call dgemv('N', ni, ni, 1.0d0, P, ni, dq, 1, 0.0d0, dqp, 1)
 dq = dqp
@@ -1119,29 +1423,39 @@ else
 endif
 end subroutine write_cycle
 
-subroutine finish(spec, g3, nat, u, ok, ncyc, E, force_out, iconv)
+subroutine finish(spec, opts, g3, nat, u, ok, ncyc, E, force_out, iconv)
 type(engine_input_t), intent(inout) :: spec
+type(engine_options_t), intent(in) :: opts
 integer, intent(in) :: nat, u, ncyc, iconv
 real(8), intent(in) :: g3(3,nat), E, force_out(nat,3)
 logical, intent(in) :: ok
 integer :: i
-engine_quiet = .false.
-cosx_force_loose = .false.
+geomopt_last_E = E ; geomopt_last_ncyc = ncyc ; geomopt_last_ok = ok
 ts_on = .false.
 do i = 1, nat
    spec%x(i) = g3(1,i) * BOHR2ANG
    spec%y(i) = g3(2,i) * BOHR2ANG
    spec%z(i) = g3(3,i) * BOHR2ANG
 enddo
+block
+   real(8) :: jx(3,nat)
+   jx = g3 * BOHR2ANG
+   call json_set_geometry(jx)
+   if (ok) then
+      call json_opt_status(.true., ncyc, 'converged')
+   else
+      call json_opt_status(.false., ncyc, 'last step, not converged')
+   endif
+end block
 write(u,'(A)') ''
-call write_results_block(u, nat, E, force_out, iconv, spec%calc_force)
+call write_results_block(u, nat, E, force_out, iconv, spec%calc_force, opts)
 write(u,'(A)') ''
 write(u,'(A)') '[FINAL GEOMETRY] (angstrom)'
 do i = 1, nat
    write(u,'(2X,A2,3F16.9)') elem_to_name(spec%atomchg(i)), &
         g3(1,i)*BOHR2ANG, g3(2,i)*BOHR2ANG, g3(3,i)*BOHR2ANG
 enddo
-if (.not. ok) write(u,'(A)') '[OPT] geometry above is the last step, NOT converged'
+if (.not. ok) write(u,'(A)') '[OPT] geometry above is the lowest-energy step, NOT converged'
 end subroutine finish
 
 subroutine profile_tail(u)

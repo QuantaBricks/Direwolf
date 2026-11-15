@@ -7,6 +7,7 @@ subroutine calc_hessian_1e(nConts, natoms, ao_atom, Ptot, Wtot, znum, ecpce, coo
 use omp_lib
 use mod_integrals, only: integrals_hessian_1e_shell, integrals_hessian_nuc_atom, integrals_hessian_nuc_atom_raw, &
                          integrals_hessian_ecp_atom_raw
+use MOL_info, only: engine_verbose
 implicit none
 integer,intent(in) :: nConts, natoms
 integer,intent(in) :: ao_atom(nConts)
@@ -23,8 +24,7 @@ real(8) :: Zeff, pm, wm, x, y
 real(8) :: tw0, t_shell, t_accA, t_nucint, t_nucacc, t_rawint, t_diag, t1
 logical :: timing
 character(len=4) :: tenv
-call get_environment_variable("ENGINE_HESS1E_TIMING", tenv)
-timing = (trim(tenv) .eq. "1")
+timing = (engine_verbose .ge. 2)
 t_shell = 0 ; t_accA = 0 ; t_nucint = 0 ; t_nucacc = 0 ; t_rawint = 0 ; t_diag = 0
 
 nthr = omp_get_max_threads()

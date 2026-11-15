@@ -4,6 +4,7 @@
 ! COSX analytic COSX exchange gradient builder - split out of mod_integrals_exchange_cosx.f90
 
 submodule (mod_integrals:exchange_cosx_impl) exchange_cosx_force_impl
+use MOL_info, only: engine_verbose
 interface
    subroutine vv10_nlc_weight_gradient(np, coor, atom_of, nper, rho, eps, wquad, beta_v, gv_wt, dwdr_out)
    use MOL_info, only: natoms
@@ -110,6 +111,8 @@ real(8),parameter :: COSX_GRAD_KSCREEN_SCALE = 10.0d0
 real(8) :: kscreen_pair
 real(8),parameter :: COSX_GRAD_KPAIR_RATIO = 1.0d-2
 logical :: do_esp_d
+logical :: use_blk_ext, blk_ext
+real(8),allocatable :: fgt(:), pgt(:)
 real(8),allocatable :: coor_batch(:,:), w_batch(:)
 real(8),allocatable :: Xb(:,:), Xb1(:,:,:), Xb2(:,:,:,:), Qb(:,:)
 real(8),allocatable :: Fa(:,:), Fb(:,:), Pha(:,:), Phb(:,:)
@@ -163,6 +166,7 @@ real(8),allocatable :: envp1(:), envp2(:), bufp1(:), bufp2(:)
 real(8) :: c_x, c_a, c_w, c_q
 character(len=16) :: v2env
 logical :: frozen
+logical :: r4_ext
 
 forceKa = 0.0d0
 forceKb = 0.0d0
@@ -178,8 +182,7 @@ psi_dev = 0.0d0 ; psi_scale = 0.0d0
 n_offer = 0_8 ; n_keep = 0_8
 tm_ao=0d0; tm_gemm=0d0; tm_espv=0d0; tm_espd=0d0; tm_gacc=0d0
 tm_r3=0d0; tm_r2=0d0; tm_eps=0d0; tm_r4=0d0
-call get_environment_variable("ENGINE_COSX_V2_TIMING", v2env)
-tmg = (trim(v2env) .eq. "1")
+tmg = (engine_verbose .ge. 2)
 kscreen_grad = COSX_GRAD_KSCREEN_SCALE*cosx_kscreen
 call get_environment_variable("ENGINE_COSX_GRAD_KSCREEN", v2env)
 if (len_trim(v2env) .gt. 0) read(v2env,*) kscreen_grad
@@ -246,14 +249,15 @@ if (fit) then
    Vb = 0.0d0
    allocate(Ma(nConts,nConts), DPa(nConts,nConts))
    call dgemm('T','N',nConts,nConts,nConts,1.0d0,Pfit,nConts,Da,nConts,0.0d0,Ma,nConts)
-   call dgemm('N','N',nConts,nConts,nConts,1.0d0,Da,nConts,Pfit,nConts,0.0d0,DPa,nConts)
+      call dgemm('N','N',nConts,nConts,nConts,1.0d0,Da,nConts,Pfit,nConts,0.0d0,DPa,nConts)
    if (.not. same_spin) then
       allocate(Mb(nConts,nConts), DPb(nConts,nConts))
       call dgemm('T','N',nConts,nConts,nConts,1.0d0,Pfit,nConts,Db,nConts,0.0d0,Mb,nConts)
-      call dgemm('N','N',nConts,nConts,nConts,1.0d0,Db,nConts,Pfit,nConts,0.0d0,DPb,nConts)
+         call dgemm('N','N',nConts,nConts,nConts,1.0d0,Db,nConts,Pfit,nConts,0.0d0,DPb,nConts)
    endif
 endif
 
+use_blk_ext = .false.
 tw0 = omp_get_wtime()
 !$omp parallel default(shared) &
 !$omp&   private(ib,bstart,nb,g,gg,d,si,sj,di,dj,i,j,ao_i,ao_j,sj_idx,shls1e,off_grids) &
@@ -266,11 +270,12 @@ tw0 = omp_get_wtime()
 !$omp&   private(dAbr_dd,dAkt_dd,dFaiC,dFajC,sgnij_v,ordf,Gfdi,Gfdj,dTh,sgij,dAbr,dAkt) &
 !$omp&   private(l2,a2,dd2,cc2,cc3,kappa2,sjj2,sk2,kk2,Gx_i,Gx_j,dGai,dGaj,dGtai,dGtaj,dFaC,dAijC,wij_v) &
 !$omp&   private(envp1,envp2,bufp1,bufp2,pt_a,pt_b,tha,thb) &
-!$omp&   private(sKa,sKb,sJa,sJb,ob,okk,ee,seg_ab,seg_cl,seg_len2,seg_t,r_far,esp_eff) &
+!$omp&   private(sKa,sKb,sJa,sJb,ob,okk,ee,seg_ab,seg_cl,seg_len2,seg_t,r_far,esp_eff,blk_ext,fgt,pgt) &
 !$omp&   reduction(+:r3p_num,r3p_an) &
 !$omp&   reduction(max:psi_dev,psi_scale) reduction(+:n_offer,n_keep) shared(psi_chk,same_spin) &
 !$omp&   reduction(+:tm_ao,tm_gemm,tm_espv,tm_espd,tm_gacc,tm_r3,tm_r2,tm_eps) &
-!$omp&   private(tm0,do_esp_d) shared(tmg,kscreen_grad,kscreen_pair)
+!$omp&   private(tm0,do_esp_d) &
+!$omp&   shared(tmg,kscreen_grad,kscreen_pair)
 allocate(buf(BATCH*maxd*maxd))
 allocate(dbuf(BATCH*maxd*maxd*3), dbuf2(BATCH*maxd*maxd*3))
 if (grad_fused) allocate(vbuf(BATCH*maxd*maxd*7))
@@ -305,6 +310,10 @@ allocate(env_g(size(env) + 3*BATCH))
 env_g(1:size(env)) = env(1:size(env))
 off_grids = size(env)
 env_g(9) = RSomega
+if (cosx_fuse_omega .gt. 0.0d0 .and. RSomega .eq. 0.0d0) then
+   env_g(9) = -cosx_fuse_omega
+   env_g(14) = cosx_fuse_c
+endif
 allocate(pt_a(BATCH,3), pt_b(BATCH,3), tha(BATCH), thb(BATCH))
 if (r3p_on) then
    allocate(envp1(size(env_g)), envp2(size(env_g)))
@@ -368,6 +377,8 @@ do ib = 0,nblocks-1
    do g = 1,nb
       Xc(:,g) = Xb(aoidx,g)
    enddo
+   blk_ext = use_blk_ext
+   if (.not. blk_ext) then
    do j = 1,nConts
       Dc(:,j) = Da(aoidx,j)
    enddo
@@ -393,6 +404,7 @@ do ib = 0,nblocks-1
       Pha = Fa
       if (.not. same_spin) Phb = Fb
    endif
+   endif
 
    if (psi_chk .and. fit) then
       psi_dev = max(psi_dev, maxval(abs(Pha))/max(maxval(abs(Fa)),1.0d-300))
@@ -402,7 +414,11 @@ do ib = 0,nblocks-1
    if (tmg) tm_gemm = tm_gemm + omp_get_wtime() - tm0
    x_block_max = maxval(abs(Xb))
    allocate(F_gmax(0:nBases-1), P_gmax(0:nBases-1))
-   do si = 0,nBases-1
+   if (blk_ext) then
+      F_gmax = fgt
+      P_gmax = pgt
+   endif
+   do si = 0,merge(-1,nBases-1,blk_ext)
       F_gmax(si) = maxval(abs(Fa(:,cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si))))
       P_gmax(si) = maxval(abs(Pha(:,cosx_ao_offset(si)+1:cosx_ao_offset(si)+cosx_shell_dim(si))))
       if (.not. same_spin) then
@@ -413,6 +429,11 @@ do ib = 0,nblocks-1
       endif
       F_gmax(si) = max(F_gmax(si), P_gmax(si))
    enddo
+   if (blk_ext) then
+      do si = 0,nBases-1
+         F_gmax(si) = max(F_gmax(si), P_gmax(si))
+      enddo
+   endif
 
    allocate(Ga(nb,nConts), Gb(nb,nConts), Gta(nb,nConts), Gtb(nb,nConts))
    Ga = 0.0d0
@@ -430,6 +451,7 @@ do ib = 0,nblocks-1
    env_g(12) = dble(nb)
    env_g(13) = dble(off_grids)
 
+   if (tmg) tm0 = omp_get_wtime()
    do si = 0,nBases-1
       di = cosx_shell_dim(si)
       atom_i = cosx_shell_atom(si)
@@ -452,6 +474,7 @@ do ib = 0,nblocks-1
          else
             esp_eff = esp_bound_p(si,sj)
          endif
+         if (RSomega .eq. 0.0d0) esp_eff = esp_eff*(1.0d0 + abs(cosx_fuse_c))
          k_bound = x_block_max*esp_eff*max(F_gmax(si),F_gmax(sj))
          if (k_bound .lt. kscreen_grad) cycle
          n_keep = n_keep + 1_8
@@ -932,15 +955,18 @@ do ib = 0,nblocks-1
       enddo
    enddo
 
+   if (tmg) tm_gacc = tm_gacc + omp_get_wtime() - tm0
+
    if (tmg) tm0 = omp_get_wtime()
    allocate(Ha(nb,nConts), Hb(nb,nConts), Hta(nb,nConts), Htb(nb,nConts))
-   allocate(Psia(nb,nConts), Psib(nb,nConts))
+   if (.not. blk_ext) allocate(Psia(nb,nConts), Psib(nb,nConts))
+   if (.not. blk_ext) then
    if (fit) then
       call dgemm('N','N',nb,nConts,nConts,1.0d0,Ga,nb,DPa,nConts,0.0d0,Psia,nb)
-      call dgemm('N','N',nb,nConts,nConts,1.0d0,Gta,nb,Da,nConts,1.0d0,Psia,nb)
+         call dgemm('N','N',nb,nConts,nConts,1.0d0,Gta,nb,Da,nConts,1.0d0,Psia,nb)
    else
       Hta = Ga + Gta
-      call dgemm('N','N',nb,nConts,nConts,1.0d0,Hta,nb,Da,nConts,0.0d0,Psia,nb)
+         call dgemm('N','N',nb,nConts,nConts,1.0d0,Hta,nb,Da,nConts,0.0d0,Psia,nb)
    endif
    if (psi_chk .and. .not. fit) &
       call dgemm('N','N',nb,nConts,nConts,1.0d0,Ga,nb,Da,nConts,0.0d0,Ha,nb)
@@ -949,11 +975,12 @@ do ib = 0,nblocks-1
    else
       if (fit) then
          call dgemm('N','N',nb,nConts,nConts,1.0d0,Gb,nb,DPb,nConts,0.0d0,Psib,nb)
-         call dgemm('N','N',nb,nConts,nConts,1.0d0,Gtb,nb,Db,nConts,1.0d0,Psib,nb)
+            call dgemm('N','N',nb,nConts,nConts,1.0d0,Gtb,nb,Db,nConts,1.0d0,Psib,nb)
       else
          Htb = Gb + Gtb
-         call dgemm('N','N',nb,nConts,nConts,1.0d0,Htb,nb,Db,nConts,0.0d0,Psib,nb)
+            call dgemm('N','N',nb,nConts,nConts,1.0d0,Htb,nb,Db,nConts,0.0d0,Psib,nb)
       endif
+   endif
    endif
 
    if (psi_chk .and. .not. fit) then
@@ -1034,7 +1061,7 @@ do ib = 0,nblocks-1
                      sign(max(abs(w_batch(g)),1.0d-300), w_batch(g))
       endif
    enddo
-   if (fit) then
+   if (fit .and. .not. blk_ext) then
       allocate(Tc(nnz,nConts))
       call dgemm('N','N',nnz,nConts,nb,1.0d0,Xc,nnz,Ga,nb,0.0d0,Tc,nnz)
       do j = 1,nConts
@@ -1087,12 +1114,12 @@ if (hess_v2) deallocate(dbpp,dbvp,dbpp2,ha_local,hb_local,SegAi,SegAj,SegBi,SegB
 tw_loop = omp_get_wtime() - tw0
 if (fit) then
    allocate(Tc(nConts,nConts))
-   call dgemm('N','N',nConts,nConts,nConts,1.0d0,Va,nConts,Da,nConts,0.0d0,Tc,nConts)
+      call dgemm('N','N',nConts,nConts,nConts,1.0d0,Va,nConts,Da,nConts,0.0d0,Tc,nConts)
    Va = Tc
    if (same_spin) then
       Vb = Va
    else
-      call dgemm('N','N',nConts,nConts,nConts,1.0d0,Vb,nConts,Db,nConts,0.0d0,Tc,nConts)
+         call dgemm('N','N',nConts,nConts,nConts,1.0d0,Vb,nConts,Db,nConts,0.0d0,Tc,nConts)
       Vb = Tc
    endif
    deallocate(Tc, Ma, DPa)
@@ -1244,12 +1271,13 @@ if (fit .and. cosx_Snum_lu_ready) then
 
       termB = 0.0d0
       uq = 0.0d0
+      r4_ext = .false.
       !$omp parallel default(shared) &
       !$omp&   private(ib,bstart,nb,gq,g,dirq,kq,sj_idx,si,Xr,Xr1,WX,WTX,tval,sKa) &
       !$omp&   reduction(+:termB)
       allocate(WX(nConts,BATCH), WTX(nConts,BATCH))
       !$omp do schedule(dynamic)
-      do ib = 0,nblocks-1
+      do ib = 0,merge(-1,nblocks-1,r4_ext)
          bstart = cosx_blkstart_hi(ib) + 1
          nb = cosx_blkstart_hi(ib+1) - cosx_blkstart_hi(ib)
          allocate(Xr(nConts,nb), Xr1(nConts,3,nb))

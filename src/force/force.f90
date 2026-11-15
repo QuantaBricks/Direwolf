@@ -11,11 +11,13 @@ use mod_integrals, only: integrals_compute_force, integrals_compute_force_1e, &
                           integrals_ecp_force, integrals_force_df_lr, integrals_compute_force_exchange_lr, &
                           integrals_nuc_deriv_allatoms, &
                           engine_puream
-use mod_exchange, only: HF_exchange_frac, RS_omega, RS_beta, cosx_enabled, exchange_force_cosx
+use mod_exchange, only: HF_exchange_frac, RS_omega, RS_beta, cosx_enabled, exchange_force_cosx, cosx_lr_fuse_on
+use mod_integrals, only: integrals_cosx_lr_fuse
 use mod_xc, only: xc_uses_tau, xc_uses_vv10
 use mod_vv10, only: vv10_nlc_grid_build, vv10_evaluate, vv10_grid_force, &
                           vv10_beta_val, vv10_nlc_radial, vv10_nlc_angular, vv10_rcut_val
 use mod_profile, only: prof_start, prof_stop
+use omp_lib, only: omp_get_thread_num
 use mod_cosmo, only: cosmo_enabled, cosmo_force_step
     implicit none
 INCLUDE 'parameter.h'
@@ -31,7 +33,7 @@ INCLUDE 'parameter.h'
     real(8),allocatable :: force_Ka_lr_df(:,:),force_Kb_lr_df(:,:)
     real(8),allocatable :: force_Ka_cosx(:,:),force_Kb_cosx(:,:)
     real(8),allocatable :: force_Ka_cosx_lr(:,:),force_Kb_cosx_lr(:,:)
-    logical :: need_exact_family, need_df_family
+    logical :: need_exact_family, need_df_family, skip_cosx_k
     real(8),allocatable :: fxc_a(:,:),fxc_b(:,:)
     real(8),allocatable :: nucderiv(:,:)
     real(8),allocatable :: ecpForce(:,:)
@@ -68,6 +70,8 @@ INCLUDE 'parameter.h'
     logical :: vv10_active
     integer,parameter :: HK(3,3) = reshape([1,2,4, 2,3,5, 4,5,6],[3,3])
     real(8),allocatable :: fxc_a_local(:,:),fxc_b_local(:,:)
+    real(8),allocatable :: ext_fxa(:,:),ext_fxb(:,:)
+    logical :: xcf_done
     real(8),allocatable :: Pgat(:,:),Pgat_b(:,:),accf(:,:),accf_b(:,:)
     real(8),allocatable :: tauw(:)
     integer :: jj
@@ -114,12 +118,15 @@ if (need_df_family) then
    endif
 endif
 
-if (cosx_enabled .and. HF_exchange_frac .gt. 0.0d0) then
+skip_cosx_k = .false.
+if (cosx_enabled .and. HF_exchange_frac .gt. 0.0d0 .and. .not. skip_cosx_k) then
    allocate(force_Ka_cosx(natoms,3), force_Kb_cosx(natoms,3))
    call prof_start("force_2e_deriv_cosx")
+   if (cosx_lr_fuse_on()) call integrals_cosx_lr_fuse(RS_omega, RS_beta/HF_exchange_frac)
    call exchange_force_cosx(nConts, natoms, Pa, Pb, 0.0d0, force_Ka_cosx, force_Kb_cosx)
+   call integrals_cosx_lr_fuse(0.0d0, 0.0d0)
    call prof_stop("force_2e_deriv_cosx")
-   if (RS_omega .gt. 0.0d0) then
+   if (RS_omega .gt. 0.0d0 .and. .not. cosx_lr_fuse_on()) then
       allocate(force_Ka_cosx_lr(natoms,3), force_Kb_cosx_lr(natoms,3))
       call prof_start("force_2e_deriv_cosx_lr")
       call exchange_force_cosx(nConts, natoms, Pa, Pb, RS_omega, force_Ka_cosx_lr, force_Kb_cosx_lr)
@@ -311,6 +318,7 @@ do i = 1,natoms
 enddo
 
 nbatches = (ngrids + BATCH - 1) / BATCH
+xcf_done = .false.
 
 wide_ld = max(max_batch_nsig, max_dft_batch_nsig)
 
@@ -347,6 +355,10 @@ allocate(fxc_a_local(3,natoms))
 fxc_a_local = 0
 allocate(fxc_b_local(3,natoms))
 fxc_b_local = 0
+if (xcf_done .and. nbatches == 0 .and. omp_get_thread_num() == 0) then
+   fxc_a_local = ext_fxa
+   fxc_b_local = ext_fxb
+endif
 if (multi .ne. 1) then
    allocate(Pgat_b(nconts,nconts))
    allocate(accf_b(nconts,3))
@@ -578,7 +590,7 @@ block
    character(32) :: dbgenv
    integer :: dbgstat
    dbg_hcore=0; dbg_s=0; dbg_j=0; dbg_k=0
-   call get_environment_variable("ENGINE_FORCE_DEBUG_PARTS", dbgenv, status=dbgstat)
+   dbgstat = merge(0, 1, engine_verbose .ge. 2)
 do i = 1,natoms
    atoms(i)%atmForce = 0
    atoms(i)%atmForce = atoms(i)%atmForce - 2.0D0*fxc_a(:,i) - 2.0D0*fxc_b(:,i)
@@ -629,10 +641,10 @@ do i = 1,natoms
             0.5d0*RS_beta*(force_Ka_lr_df(i,:)+force_Kb_lr_df(i,:))
       endif
    endif
-   if (cosx_enabled .and. HF_exchange_frac .gt. 0.0d0) then
+   if (cosx_enabled .and. HF_exchange_frac .gt. 0.0d0 .and. .not. skip_cosx_k) then
       atoms(i)%atmForce = atoms(i)%atmForce + &
          2.0D0*HF_exchange_frac*(force_Ka_cosx(i,:)+force_Kb_cosx(i,:))
-      if (RS_omega .gt. 0.0d0) then
+      if (RS_omega .gt. 0.0d0 .and. .not. cosx_lr_fuse_on()) then
          atoms(i)%atmForce = atoms(i)%atmForce + &
             2.0D0*RS_beta*(force_Ka_cosx_lr(i,:)+force_Kb_cosx_lr(i,:))
       endif
@@ -727,6 +739,7 @@ subroutine calc_force_vv10()
     integer :: atom_bf_start(natoms+1), atom_bf_list(nconts), atom_bf_cursor(natoms)
     real(8) :: beta_v, wdel
     integer :: nper, np2
+    logical :: pass1_done, pass3_done
     real(8) :: atom_rcut2(natoms), dist2_A
     integer :: jsh
     real(8),parameter :: VV10_GRAD_SIG_CUTOFF = 1.0d-6
@@ -776,8 +789,9 @@ subroutine calc_force_vv10()
     enddo
 
     call prof_start("force_vv10_pass1")
+    pass1_done = .false.
     !$omp parallel do schedule(static) private(i,mu,dist2_bf,kk,nsig_grad,sig_idx_grad)
-    do i = 1,np
+    do i = 1,merge(0,np,pass1_done)
        block
           real(8) :: val0(nconts), val1(nconts,3), wtot(nconts)
           integer :: n
@@ -816,10 +830,11 @@ subroutine calc_force_vv10()
        enddo
     enddo
     call prof_start("force_vv10_pass3")
+    pass3_done = .false.
     !$omp parallel do schedule(dynamic,64) private(i,mu,dd,ee,A,iat,n,dist2_A,kk,nsig_grad,dist2_bf,sig_idx_grad) &
     !$omp&   private(nsig_hess,sig_idx_hess) &
     !$omp&   reduction(+:gv_gbf)
-    do i = 1,np
+    do i = 1,merge(0,np,pass3_done)
        block
           real(8) :: val0(nconts), val1(nconts,3), Hess(nconts,6)
           real(8) :: wtot(nconts), C(nconts,3), TCV(nconts), hdt(nconts,3), C_A(nconts,3)

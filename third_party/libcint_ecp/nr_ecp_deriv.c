@@ -961,6 +961,106 @@ static int _igv_cart(double *gctr, int *shls, int *ecpbas, int necpbas,
         return has_value;
 }
 
+static int _rbra_cart(double *gctr, int *shls, int *ecpbas, int necpbas,
+                     int *atm, int natm, int *bas, int nbas, double *env,
+                     ECPOpt *opt, double *cache)
+{
+        if (necpbas == 0) {
+                return 0;
+        }
+        const int ish = shls[0];
+        const int jsh = shls[1];
+        const int nci = bas[NCTR_OF+ish*BAS_SLOTS];
+        const int ncj = bas[NCTR_OF+jsh*BAS_SLOTS];
+        const int li = bas[ANG_OF+ish*BAS_SLOTS];
+        const int lj = bas[ANG_OF+jsh*BAS_SLOTS];
+        const int nfi = (li+1) * (li+2) / 2;
+        const int nfj = (lj+1) * (lj+2) / 2;
+        const int nfi1 = (li+2) * (li+3) / 2;
+        const int di = nfi * nci;
+        const int dj = nfj * ncj;
+        const int dij = di * dj;
+        int ngcart = nfi1*nci*nfj*ncj;
+        const double *ri = env + atm[PTR_COORD+bas[ATOM_OF+ish*BAS_SLOTS]*ATM_SLOTS];
+        const double *rj = env + atm[PTR_COORD+bas[ATOM_OF+jsh*BAS_SLOTS]*ATM_SLOTS];
+        double *buf1;
+        MALLOC_INSTACK(buf1, ngcart * 2);
+        double *buf2 = buf1 + ngcart;
+
+        int i, j;
+        double *gctrx = gctr;
+        double *gctry = gctrx + dij;
+        double *gctrz = gctry + dij;
+        double rirj[3];
+        rirj[0] = ri[0] - rj[0];
+        rirj[1] = ri[1] - rj[1];
+        rirj[2] = ri[2] - rj[2];
+
+        int fakbas[2*BAS_SLOTS];
+        for (i = 0; i < BAS_SLOTS; i++) {
+                fakbas[          i] = bas[ish*BAS_SLOTS+i];
+                fakbas[BAS_SLOTS+i] = bas[jsh*BAS_SLOTS+i];
+        }
+        int has_value = 0;
+        int shls1[2] = {0, 1};
+        double fac, vx, vy, vz;
+
+        fakbas[ANG_OF] = li + 1;
+        NPdset0(buf1, ngcart);
+        has_value = (ECPtype1_cart(buf1, shls1, ecpbas, necpbas, atm, natm,
+                                   fakbas, 2, env, opt, cache) | has_value);
+        has_value = (ECPtype2_cart(buf1, shls1, ecpbas, necpbas, atm, natm,
+                                   fakbas, 2, env, opt, cache) | has_value);
+        NPdset0(buf2, dij);
+        has_value = (ECPtype1_cart(buf2, shls, ecpbas, necpbas, atm, natm,
+                                   bas, nbas, env, opt, cache) | has_value);
+        has_value = (ECPtype2_cart(buf2, shls, ecpbas, necpbas, atm, natm,
+                                   bas, nbas, env, opt, cache) | has_value);
+        if (!has_value) {
+                return has_value;
+        }
+
+        if (li == 0) {
+                fac = 1./sqrt(3.);
+        } else if (li == 1) {
+                fac = 0.488602511902919921;
+        } else {
+                fac = 1.;
+        }
+        for (j = 0; j < nci*nfj*ncj; j++) {
+                for (i = 0; i < nfi; i++) {
+                        vx = fac * buf1[j*nfi1+        i ] + ri[0] * buf2[j*nfi+i];
+                        vy = fac * buf1[j*nfi1+_y_addr[i]] + ri[1] * buf2[j*nfi+i];
+                        vz = fac * buf1[j*nfi1+_z_addr[i]] + ri[2] * buf2[j*nfi+i];
+                        gctrx[j*nfi+i] = vx;
+                        gctry[j*nfi+i] = vy;
+                        gctrz[j*nfi+i] = vz;
+                }
+        }
+        return has_value;
+}
+
+/* <r mu|U|nu> (the position on the bra, origin 0), three components: Direwolf assembles the London-orbital derivative of the
+ * ECP from it as -1/2 [R_mu x <mu|r U|nu> - R_nu x <mu|U r|nu>], <mu|U r|nu> = <r nu|U|mu> (ECPscalar_ignuc above uses
+ * <mu|r U|nu> on both sides, which is not antisymmetric for the semilocal projectors) */
+int ECPscalar_rbra_cart(double *out, int *dims, int *shls, int *atm, int natm,
+                        int *bas, int nbas, double *env, ECPOpt *opt, double *cache)
+{
+        int necpbas = (int)env[AS_NECPBAS];
+        int *ecpbas = bas + ((int)env[AS_ECPBAS_OFFSET])*BAS_SLOTS;
+        return _cart_factory(_rbra_cart, out, 3, dims, shls, ecpbas, necpbas,
+                             atm, natm, bas, nbas, env, opt, cache);
+}
+
+int ECPscalar_rbra_sph(double *out, int *dims, int *shls, int *atm, int natm,
+                       int *bas, int nbas, double *env, ECPOpt *opt, double *cache)
+{
+        int necpbas = (int)env[AS_NECPBAS];
+        int *ecpbas = bas + ((int)env[AS_ECPBAS_OFFSET])*BAS_SLOTS;
+        return _sph_factory(_rbra_cart, out, 3, dims, shls, ecpbas, necpbas,
+                            atm, natm, bas, nbas, env, opt, cache);
+}
+
 int ECPscalar_ignuc_cart(double *out, int *dims, int *shls, int *atm, int natm,
                          int *bas, int nbas, double *env, ECPOpt *opt, double *cache)
 {

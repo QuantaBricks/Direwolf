@@ -8,8 +8,8 @@
  K          = 'cosx'
 &end
 &irc
- irc_step = 0.20
- irc_maxpoints = 60
+ step = 0.20
+ max_points = 60
 &end
 &atoms
 Pd    -0.000278647     0.090550235     0.067243856

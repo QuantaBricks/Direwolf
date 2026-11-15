@@ -11,14 +11,17 @@ use mod_integrals, only: integrals_build_coulomb, integrals_set_accuracy, &
                           engine_use_df_j, engine_use_df_k
 use GRID_info, only: xc_sig_now, XC_SIG_TIGHT, XC_SIG_LOOSE
 use GRID_info, only: xc_geo_level, XC_NLEVEL, XC_LEVEL_PRMS
-use GRID_info, only: xcgrid_dynamic, xcgrid_refined, xcgrid_switch_prms, &
+use GRID_info, only: xcgrid_switch_prms, &
                       xcgrid_theory_dynamic, xcgrid_theory_refined
 use mod_vv10, only: vv10_dynamic, vv10_active_now, vv10_just_activated, vv10_switch_prms
 use mod_exchange, only: HF_exchange_frac, RS_omega, RS_beta, exchange_build, exchange_build_lr, &
                          exchange_build_cosx_lr, exchange_build_cosx_sr, &
-                         exchange_build_df, exchange_build_df_lr, exchange_build_cosx, cosx_enabled
+                         exchange_build_df, exchange_build_df_lr, exchange_build_cosx, cosx_enabled, &
+                         cosx_lr_fuse_on
 use mod_density_fitting, only: df_build_coulomb
+use mod_integrals, only: integrals_cosx_lr_fuse
 use mod_profile, only: prof_start, prof_stop
+use mod_meminfo, only: mem_mark
 use mod_cosmo, only: cosmo_enabled, cosmo_scf_step
 use mod_scf_history, only: scf_hist_set_ecomponents
 implicit none
@@ -45,9 +48,6 @@ allocate(Fxc_a(nconts,nconts))
 allocate(Fxc_b(nconts,nconts))
 allocate(Fra(nconts,nconts))
 allocate(Frb(nconts,nconts))
-if (xcgrid_dynamic .and. .not. xcgrid_refined) then
-   if (Prms .gt. 0.0d0 .and. Prms_round8(Prms) .lt. xcgrid_switch_prms) call xcgrid_refine()
-endif
 if (xcgrid_theory_dynamic .and. .not. xcgrid_theory_refined) then
    if (Prms .gt. 0.0d0 .and. Prms_round8(Prms) .lt. xcgrid_switch_prms) call xcgrid_theory_refine()
 endif
@@ -72,6 +72,7 @@ else
    call  DFT_calc(Exc,Fxc_a,Fxc_b,info,need_deriv)
 endif
 call prof_stop("dft_xc")
+call mem_mark("Fock build after the XC", engine_verbose)
 call system_clock(wc4)
 dft_dt = real(wc4-wc3,8)/wc_rate
 if (diis_debug) print *, "RTDBG DFT_calc done, dt=",dft_dt
@@ -105,6 +106,7 @@ else
    call integrals_build_coulomb(nconts, Ptot, Jmat)
 endif
 call prof_stop("coulomb_build")
+call mem_mark("Fock build after the Coulomb part", engine_verbose)
 if (diis_debug) print *, "RTDBG coulomb_build done"
 if (diis_debug) call flush(6)
 E_cosmo_nuc = 0.0d0
@@ -122,13 +124,53 @@ if (HF_exchange_frac .gt. 0.0d0) then
       Ka = 0.0d0
       Kb = 0.0d0
    else if (cosx_enabled) then
+      if (cosx_lr_fuse_on()) call integrals_cosx_lr_fuse(RS_omega, RS_beta/HF_exchange_frac)
       call exchange_build_cosx(nconts, Pa_n, Pb_n, Ka, Kb, need_deriv)
+      call integrals_cosx_lr_fuse(0.0d0, 0.0d0)
+      block
+         use mod_integrals, only: direct_mode, cosx_force_hi_grid
+         character(len=8) :: ec
+         integer :: es
+         real(8),allocatable,save :: dKa(:,:), dKb(:,:)
+         real(8),allocatable :: Kxa(:,:), Kxb(:,:)
+         logical :: dm_save
+         call get_environment_variable("ENGINE_COSX_COMP", ec, status=es)
+         if (es .eq. 0 .and. trim(ec) .eq. "2") then
+            if (.not. allocated(dKa)) then
+               allocate(Kxa(nconts,nconts), Kxb(nconts,nconts), dKa(nconts,nconts), dKb(nconts,nconts))
+               dm_save = cosx_force_hi_grid
+               cosx_force_hi_grid = .true.
+               call exchange_build_cosx(nconts, Pa_n, Pb_n, Kxa, Kxb, .false.)
+               cosx_force_hi_grid = dm_save
+               dKa = Kxa - Ka
+               dKb = Kxb - Kb
+               write(*,"(2X,'[comp] max|Khi-Klo| a ',ES10.3,'  rms ',ES10.3)") maxval(abs(dKa)), sqrt(sum(dKa**2)/size(dKa))
+            endif
+            Ka = Ka + dKa
+            Kb = Kb + dKb
+         endif
+         if (es .eq. 0 .and. trim(ec) .eq. "1") then
+            if (.not. allocated(dKa)) then
+               allocate(Kxa(nconts,nconts), Kxb(nconts,nconts), dKa(nconts,nconts), dKb(nconts,nconts))
+               dm_save = direct_mode
+               direct_mode = .true.
+               call exchange_build(nconts, Pa_n, Pb_n, Kxa, Kxb)
+               direct_mode = dm_save
+               dKa = Kxa - Ka
+               dKb = Kxb - Kb
+               write(*,"(2X,'[comp] max|Kex-Kgrid| a ',ES10.3,'  rms ',ES10.3)") maxval(abs(dKa)), sqrt(sum(dKa**2)/size(dKa))
+            endif
+            Ka = Ka + dKa
+            Kb = Kb + dKb
+         endif
+      end block
    else if (engine_use_df_k) then
       call exchange_build_df(nconts, C_a, n_alpha, C_b, n_beta, Ka, Kb)
    else if (.not. jk_fused_this_iter) then
       call exchange_build(nconts, Pa_n, Pb_n, Ka, Kb)
    endif
    call prof_stop("exchange_build")
+call mem_mark("Fock build after the exchange", engine_verbose)
    Fra = Hcore + Jmat - HF_exchange_frac*Ka
    Frb = Hcore + Jmat - HF_exchange_frac*Kb
    if (RS_omega .gt. 0.0d0) then
@@ -136,7 +178,7 @@ if (HF_exchange_frac .gt. 0.0d0) then
          real(8),allocatable :: Ka_lr(:,:), Kb_lr(:,:)
          allocate(Ka_lr(nconts,nconts),Kb_lr(nconts,nconts))
          call prof_start("exchange_build_lr")
-         if (cosx_enabled .and. iter .eq. 0) then
+         if (cosx_enabled .and. (iter .eq. 0 .or. cosx_lr_fuse_on())) then
             Ka_lr = 0.0d0
             Kb_lr = 0.0d0
          else if (cosx_enabled) then

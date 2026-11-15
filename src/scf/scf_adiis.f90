@@ -7,43 +7,74 @@
 subroutine build_adiis_terms(n,nconts,Pa_hist,Fa_hist,Pb_hist,Fb_hist,open_shell,lin,quad)
 implicit none
 integer,intent(in) :: n,nconts
-real(4),intent(in) :: Pa_hist(nconts,nconts,n)
-real(8),intent(in) :: Fa_hist(nconts,nconts,n)
-real(4),intent(in) :: Pb_hist(nconts,nconts,n)
-real(8),intent(in) :: Fb_hist(nconts,nconts,n)
+real(4),intent(in) :: Pa_hist(nconts*(nconts+1)/2,n)
+real(8),intent(in) :: Fa_hist(nconts*(nconts+1)/2,n)
+real(4),intent(in) :: Pb_hist(nconts*(nconts+1)/2,n)
+real(8),intent(in) :: Fb_hist(nconts*(nconts+1)/2,n)
 logical,intent(in) :: open_shell
 real(8),intent(out) :: lin(n),quad(n,n)
-real(8),allocatable :: dPa(:,:,:),dPb(:,:,:)
-integer :: i,j
-real(8) :: qraw
+integer :: i,j,k,d,npk
+real(8) :: qraw,tri,dg,t
 
-allocate(dPa(nconts,nconts,n))
+npk = nconts*(nconts+1)/2
+!$omp parallel do schedule(static) default(shared) private(i,k,d,tri,dg,t)
 do i = 1,n
-   dPa(:,:,i) = real(Pa_hist(:,:,i),8) - real(Pa_hist(:,:,n),8)
-enddo
-if (open_shell) then
-   allocate(dPb(nconts,nconts,n))
-   do i = 1,n
-      dPb(:,:,i) = real(Pb_hist(:,:,i),8) - real(Pb_hist(:,:,n),8)
+   tri = 0.0d0
+   do k = 1,npk
+      tri = tri + (real(Pa_hist(k,i),8)-real(Pa_hist(k,n),8))*Fa_hist(k,n)
    enddo
-endif
-
-do i = 1,n
-   lin(i) = 2.0d0*sum(dPa(:,:,i)*real(Fa_hist(:,:,n),8))
-   if (open_shell) lin(i) = lin(i) + 2.0d0*sum(dPb(:,:,i)*real(Fb_hist(:,:,n),8))
+   dg = 0.0d0
+   do d = 1,nconts
+      k = d*(d+1)/2
+      dg = dg + (real(Pa_hist(k,i),8)-real(Pa_hist(k,n),8))*Fa_hist(k,n)
+   enddo
+   lin(i) = 2.0d0*(2.0d0*tri - dg)
+   if (open_shell) then
+      tri = 0.0d0
+      do k = 1,npk
+         tri = tri + (real(Pb_hist(k,i),8)-real(Pb_hist(k,n),8))*Fb_hist(k,n)
+      enddo
+      dg = 0.0d0
+      do d = 1,nconts
+         k = d*(d+1)/2
+         dg = dg + (real(Pb_hist(k,i),8)-real(Pb_hist(k,n),8))*Fb_hist(k,n)
+      enddo
+      lin(i) = lin(i) + 2.0d0*(2.0d0*tri - dg)
+   endif
 enddo
+!$omp end parallel do
 
+!$omp parallel do collapse(2) schedule(static) default(shared) private(i,j,k,d,tri,dg,qraw)
 do i = 1,n
    do j = 1,n
-      qraw = sum(dPa(:,:,i)*(real(Fa_hist(:,:,j),8)-real(Fa_hist(:,:,n),8)))
-      if (open_shell) qraw = qraw + sum(dPb(:,:,i)*(real(Fb_hist(:,:,j),8)-real(Fb_hist(:,:,n),8)))
+      tri = 0.0d0
+      do k = 1,npk
+         tri = tri + (real(Pa_hist(k,i),8)-real(Pa_hist(k,n),8))*(Fa_hist(k,j)-Fa_hist(k,n))
+      enddo
+      dg = 0.0d0
+      do d = 1,nconts
+         k = d*(d+1)/2
+         dg = dg + (real(Pa_hist(k,i),8)-real(Pa_hist(k,n),8))*(Fa_hist(k,j)-Fa_hist(k,n))
+      enddo
+      qraw = 2.0d0*tri - dg
+      if (open_shell) then
+         tri = 0.0d0
+         do k = 1,npk
+            tri = tri + (real(Pb_hist(k,i),8)-real(Pb_hist(k,n),8))*(Fb_hist(k,j)-Fb_hist(k,n))
+         enddo
+         dg = 0.0d0
+         do d = 1,nconts
+            k = d*(d+1)/2
+            dg = dg + (real(Pb_hist(k,i),8)-real(Pb_hist(k,n),8))*(Fb_hist(k,j)-Fb_hist(k,n))
+         enddo
+         qraw = qraw + 2.0d0*tri - dg
+      endif
       quad(i,j) = qraw
    enddo
 enddo
+!$omp end parallel do
 quad = quad + transpose(quad)
 
-deallocate(dPa)
-if (open_shell) deallocate(dPb)
 end subroutine build_adiis_terms
 
 function adiis_fx(n,Amat,bvec,x) result(val)

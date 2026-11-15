@@ -9,12 +9,11 @@
 
 &end
 &cosmo
- cosmo_on = .true.
- cosmo_epsilon = 78.39
+ epsilon = 78.39
 &end
 &irc
- irc_step = 0.2
- irc_maxpoints = 60
+ step = 0.2
+ max_points = 60
 &end
 &atoms
 Cl    -0.000210400     0.000116086    -2.255125859

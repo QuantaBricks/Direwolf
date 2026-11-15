@@ -140,7 +140,8 @@ do flat_ij = 0,n_pairs_all-1
          cycle
       endif
       if (schwarz_bound(ish,jsh)*schwarz_bound(ksh,lsh) &
-          *max(dmax_shell(ish,jsh),dmax_shell(ksh,lsh)) .lt. force_density_cutoff) then
+          *max(dmax_shell(ish,jsh), dmax_shell(ksh,lsh), dmax_shell(ish,ksh), dmax_shell(ish,lsh), &
+               dmax_shell(jsh,ksh), dmax_shell(jsh,lsh)) .lt. force_density_cutoff) then
          fstat_cut_dn = fstat_cut_dn + 1
          cycle
       endif
@@ -295,7 +296,8 @@ module subroutine integrals_compute_force_exchange_lr(nConts, Pa, Pb, dKa_lr, dK
           if (pair_kl .gt. pair_ij) cycle
           if (schwarz_bound(ish,jsh)*schwarz_bound(ksh,lsh) .lt. SCHWARZ_CUTOFF) cycle
           if (schwarz_bound(ish,jsh)*schwarz_bound(ksh,lsh) &
-              *max(dmax_shell(ish,jsh),dmax_shell(ksh,lsh)) .lt. density_screen_cutoff) cycle
+              *max(dmax_shell(ish,jsh), dmax_shell(ksh,lsh), dmax_shell(ish,ksh), dmax_shell(ish,lsh), &
+                   dmax_shell(jsh,ksh), dmax_shell(jsh,lsh)) .lt. density_screen_cutoff) cycle
           di = shell_dim(ish); dj = shell_dim(jsh); dk = shell_dim(ksh); dl = shell_dim(lsh)
 
           shls2e = (/ish,jsh,ksh,lsh/)

@@ -55,7 +55,7 @@ integer,allocatable :: ao_offset(:), atom_ao_off(:)
 real(8),allocatable :: Rx(:,:), Ry(:,:), Rz(:,:)
 real(8),allocatable :: Ptot(:,:), PS(:,:), Shalf(:,:), PSh(:,:)
 real(8),allocatable :: buf(:,:,:)
-real(8),allocatable :: q_lowdin(:)
+real(8),allocatable :: q_lowdin(:), Pspin(:,:), spin_mull(:), spin_lowd(:)
 real(8) :: dip_nuc(3), dip_elec(3), dip_au(3)
 real(8) :: dip_au_norm, dip_debye_norm
 real(8),parameter :: AU2DEBYE = 2.541746d0
@@ -107,6 +107,12 @@ deallocate(buf)
 
 allocate(Ptot(nConts,nConts))
 Ptot = Pa + Pb
+allocate(spin_mull(Natoms_in), spin_lowd(Natoms_in))
+spin_mull = 0.0d0 ; spin_lowd = 0.0d0
+if (multi .ne. 1) then
+   allocate(Pspin(nConts,nConts))
+   Pspin = Pa - Pb
+endif
 
 dip_nuc = 0.0d0
 do ia = 1,Natoms_in
@@ -121,33 +127,53 @@ dip_au_norm = sqrt(sum(dip_au**2))
 dip_debye_norm = dip_au_norm*AU2DEBYE
 deallocate(Rx,Ry,Rz)
 
-allocate(PS(nConts,nConts))
-PS = matmul(Ptot,S)
 do ia = 1,Natoms_in
    Zeff = real(atoms(ia)%charge - atoms(ia)%ecpCoreElec,8)
-   MLcharge_out(ia) = Zeff - sum((/(PS(i0,i0),i0=atom_ao_off(ia-1)+1,atom_ao_off(ia))/))
+   MLcharge_out(ia) = Zeff
+   do i0 = atom_ao_off(ia-1)+1,atom_ao_off(ia)
+      MLcharge_out(ia) = MLcharge_out(ia) - sum(Ptot(i0,:)*S(:,i0))
+      if (multi .ne. 1) spin_mull(ia) = spin_mull(ia) + sum(Pspin(i0,:)*S(:,i0))
+   enddo
 enddo
-deallocate(PS)
 
 allocate(S_e(nConts),S_tmp(nConts,nConts),S_diag(nConts,nConts))
 S_tmp = S
-LWORKs = 1 + 6*nConts + nConts**2
-allocate(WORKs(LWORKs))
-call DSYEV('V','U',nConts,S_tmp,nConts,S_e,WORKs,LWORKs,INFOs)
-S_diag = 0.0d0
+block
+   integer :: liwork_q, iwork_q(1)
+   real(8) :: wq(1)
+   integer,allocatable :: iwork(:)
+   call DSYEVD('V','U',nConts,S_tmp,nConts,S_e,wq,-1,iwork_q,-1,INFOs)
+   LWORKs = max(int(wq(1)), 1 + 6*nConts + 2*nConts**2)
+   liwork_q = max(iwork_q(1), 3 + 5*nConts)
+   allocate(WORKs(LWORKs), iwork(liwork_q))
+   call DSYEVD('V','U',nConts,S_tmp,nConts,S_e,WORKs,LWORKs,iwork,liwork_q,INFOs)
+   deallocate(iwork)
+end block
 do i0 = 1,nConts
-   S_diag(i0,i0) = sqrt(max(S_e(i0),0.0d0))
+   S_diag(:,i0) = S_tmp(:,i0)*sqrt(max(S_e(i0),0.0d0))
 enddo
 allocate(Shalf(nConts,nConts))
-Shalf = matmul(S_tmp,matmul(S_diag,transpose(S_tmp)))
+call dgemm('N','T',nConts,nConts,nConts,1.0d0,S_diag,nConts,S_tmp,nConts,0.0d0,Shalf,nConts)
 deallocate(S_e,S_tmp,S_diag,WORKs)
 
 allocate(PSh(nConts,nConts),q_lowdin(Natoms_in))
-PSh = matmul(Shalf,matmul(Ptot,Shalf))
+call dgemm('N','N',nConts,nConts,nConts,1.0d0,Ptot,nConts,Shalf,nConts,0.0d0,PSh,nConts)
 do ia = 1,Natoms_in
    Zeff = real(atoms(ia)%charge - atoms(ia)%ecpCoreElec,8)
-   q_lowdin(ia) = Zeff - sum((/(PSh(i0,i0),i0=atom_ao_off(ia-1)+1,atom_ao_off(ia))/))
+   q_lowdin(ia) = Zeff
+   do i0 = atom_ao_off(ia-1)+1,atom_ao_off(ia)
+      q_lowdin(ia) = q_lowdin(ia) - sum(Shalf(i0,:)*PSh(:,i0))
+   enddo
 enddo
+if (multi .ne. 1) then
+   call dgemm('N','N',nConts,nConts,nConts,1.0d0,Pspin,nConts,Shalf,nConts,0.0d0,PSh,nConts)
+   do ia = 1,Natoms_in
+      do i0 = atom_ao_off(ia-1)+1,atom_ao_off(ia)
+         spin_lowd(ia) = spin_lowd(ia) + sum(Shalf(i0,:)*PSh(:,i0))
+      enddo
+   enddo
+   deallocate(Pspin)
+endif
 deallocate(Shalf,PSh,Ptot)
 
 print *, '[RESULTS]'
@@ -157,7 +183,21 @@ print '(" Dipole moment (a.u.):   X=",F10.5,"  Y=",F10.5,"  Z=",F10.5,"  |mu|=",
 print '(" Dipole moment (Debye):  X=",F10.5,"  Y=",F10.5,"  Z=",F10.5,"  |mu|=",F10.5)', &
       dip_au(1)*AU2DEBYE,dip_au(2)*AU2DEBYE,dip_au(3)*AU2DEBYE,dip_debye_norm
 print *
-if (present(RESPcharge_in)) then
+if (multi .ne. 1) then
+   if (present(RESPcharge_in)) then
+      print '(A6,A5,5A12)', 'Atom','Z','Mulliken_q','Lowdin_q','RESP_q','Mull_spin','Lowd_spin'
+      do ia = 1,Natoms_in
+         print '(I6,I5,5F12.6)', ia, atoms(ia)%charge, MLcharge_out(ia), q_lowdin(ia), RESPcharge_in(ia), &
+               spin_mull(ia), spin_lowd(ia)
+      enddo
+   else
+      print '(A6,A5,4A12)', 'Atom','Z','Mulliken_q','Lowdin_q','Mull_spin','Lowd_spin'
+      do ia = 1,Natoms_in
+         print '(I6,I5,4F12.6)', ia, atoms(ia)%charge, MLcharge_out(ia), q_lowdin(ia), spin_mull(ia), spin_lowd(ia)
+      enddo
+   endif
+   print '(A,F10.5,A,F10.5)', '  Sum of spin populations: Mulliken ', sum(spin_mull), '   Lowdin ', sum(spin_lowd)
+else if (present(RESPcharge_in)) then
    print '(A6,A5,3A12)', 'Atom','Z','Mulliken_q','Lowdin_q','RESP_q'
    do ia = 1,Natoms_in
       print '(I6,I5,3F12.6)', ia, atoms(ia)%charge, MLcharge_out(ia), q_lowdin(ia), RESPcharge_in(ia)
@@ -168,7 +208,21 @@ else
       print '(I6,I5,2F12.6)', ia, atoms(ia)%charge, MLcharge_out(ia), q_lowdin(ia)
    enddo
 endif
-deallocate(q_lowdin)
+block
+   use mod_engine_report, only: report_properties
+   real(8) :: q_r(Natoms_in)
+   real(8), allocatable :: eb(:)
+   if (multi .eq. 1) then
+      allocate(eb(0))
+   else
+      eb = eLev_b
+   endif
+   q_r = 0.0d0
+   if (present(RESPcharge_in)) q_r = RESPcharge_in(1:Natoms_in)
+   call report_properties(dip_au, MLcharge_out(1:Natoms_in), q_lowdin, present(RESPcharge_in), q_r, multi .eq. 1, &
+                        eLev_a, n_alpha, eb, n_beta)
+end block
+deallocate(q_lowdin, spin_mull, spin_lowd)
 print *
 print *,"  Orbital energies (Hartree):"
 if (multi .eq. 1) then

@@ -6,7 +6,6 @@ all on water with B3LYP/def2-SVP, RIJCOSX:
   frequencies at the converged geometry.
 - `water_toml_freq.toml` / `water_toml_opt_freq.toml` - TOML format, `runtype = "freq"` and
   `runtype = "opt, freq"`.
-- `water_freq.gjf` - Gaussian format, `# B3LYP/def2SVP Opt Freq`.
 
 Run with `./Direwolf <file>`. The output file gets `[FREQUENCIES]`,
 `[NORMALMODES]`, `[IR]`, `[DIPOLEDERIV]` and `[THERMO]`; the Hessian matrix is not printed there, it is in `<base>.hess`; also written: `<base>.hess`, `<base>.modes.csv` and

@@ -146,6 +146,7 @@ call prof_stop("resp_two_stage_fit")
 
 RESPcharge_out = q_final
 
+if (.not. engine_quiet) then
 print *
 print *,"===== RESP fit (Psi4 cdsgroup/resp protocol, Bayly:93) ====="
 print '(" Grid points kept: ",I0," (of ",I0," candidates); density=",F4.1,"/Ang^2")', &
@@ -156,6 +157,7 @@ print '(" resp_a: stage1=",F7.4,"  stage2=",F7.4,"   resp_b=",F5.2,"   IHFREE=T"
 print '(" Equivalence groups: ",I0,"   Total charge: ",F12.8," (target ",F12.8,")")', &
       maxval(stage2_group), sum(q_final), real(Charge,8)
 print *,"=============================================================="
+endif
 
 deallocate(grid, Vgrid, Dmat, con_coef, con_rhs)
 

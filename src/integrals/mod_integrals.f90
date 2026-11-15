@@ -45,7 +45,10 @@ public :: incr_since_full, incr_full_period
 public :: integrals_build_exchange
 public :: integrals_build_exchange_cosx
 public :: integrals_build_exchange_cosx_batch
-public :: integrals_build_exchange_cosx_batch_c
+public :: integrals_build_exchange_cosx_batch_c, integrals_build_exchange_cosx_batch_cs
+public :: integrals_build_exchange_cosx_batch_c2, integrals_build_exchange_cosx_batch_c2g, integrals_build_exchange_cosx_batch_raw
+public :: integrals_cosx_resp_cache_clear, integrals_cosx_lr_fuse, cosx_set_bra_kind, cosx_set_resp_grid
+public :: cosx_set_resp_relscreen, cosx_set_force_grid
 public :: integrals_build_exchange_cosx_lr
 public :: integrals_build_exchange_cosx_sr
 public :: integrals_force_exchange_cosx
@@ -64,8 +67,8 @@ public :: decide_df_force_mode
 public :: df_direct_mode
 public :: df_store_release, df_store_restore
 public :: direct_mode
-public :: hessian_run, freq_request, hessian_return, polar_request
-public :: mayer_request, mayer_bo
+public :: hessian_run
+public :: mayer_bo
 public :: df_force_direct_mode
 public :: df_energy_need_gb
 public :: df_energy_avail_gb
@@ -86,6 +89,8 @@ public :: nRec
 public :: nContsAux
 public :: compute_atomic_density
 public :: calc_properties, calc_mayer_bond_orders, integrals_dipole_ao, integrals_dipole_pulay
+public :: integrals_giao_1e, integrals_nmr_nucleus, integrals_giao_jk, integrals_k_general, integrals_ao_atom
+public :: integrals_giao_ri_j, integrals_giao_cosx_k, integrals_giao_charges
 public :: resp_charges
 public :: engine_harris_guess
 public :: cosmo_build_one_tess_matrix
@@ -131,11 +136,7 @@ integer(8)          :: nRec = 0
 
 logical              :: direct_mode = .false.
 logical              :: hessian_run = .false.
-logical              :: freq_request = .false.
-logical              :: polar_request = .false.
-logical              :: mayer_request = .false.
 real(8), allocatable :: mayer_bo(:,:)
-logical              :: hessian_return = .false.
 
 real(8),allocatable :: schwarz_bound(:,:)
 real(8),parameter   :: SCHWARZ_CUTOFF = 1.0d-8
@@ -195,6 +196,7 @@ real(8),allocatable :: dfB_compact(:,:)
 real(8),allocatable :: dfB_compact_LR(:,:)
 real(8),allocatable :: df_evec(:,:)
 real(8),allocatable :: df_evalinv(:)
+logical :: df_metric_chol = .false.
 real(8),parameter :: DF_EVAL_FLOOR = 1.0d-8
 integer(8) :: int3c2e_opt = 0_8, int2c2e_opt = 0_8
 integer(8) :: int3c2e_opt_lr = 0_8
@@ -208,10 +210,12 @@ real(8) :: df_force_need_gb = 0.0d0, df_force_avail_gb = 0.0d0
 real(8),allocatable :: df_direct_Jlocal_pool(:,:,:)
 real(8),allocatable :: df_direct_bveclocal_pool(:,:)
 logical :: df_direct_pool_built = .false.
+logical :: mdj_stale = .true.
 real(8),allocatable :: df_direct_cvec_cache(:)
 real(8),allocatable :: df_direct_cvec_cache_Ptot(:,:)
 logical :: df_direct_cvec_cache_valid = .false.
 integer :: df_n_triples = 0
+logical :: df_triple_defer = .false.
 integer(2),allocatable :: df_triple_ish(:), df_triple_jsh(:), df_triple_ksh(:)
 integer,allocatable :: df_shell_ncgto(:), df_shell_offset(:)
 
@@ -464,6 +468,55 @@ module subroutine integrals_build_exchange_cosx_batch_c(nConts, nd, Lf, nop, Co,
     real(8),intent(in) :: Lf(nConts,nop,nd), Co(nConts,nop)
     real(8),intent(out) :: KC(nConts,nop,nd)
 end subroutine integrals_build_exchange_cosx_batch_c
+module subroutine integrals_build_exchange_cosx_batch_cs(nConts, nd, Lf, nop, Co, zsign, KC)
+    implicit none
+    integer,intent(in) :: nConts, nd, nop
+    real(8),intent(in) :: Lf(nConts,nop,nd), Co(nConts,nop), zsign(nd)
+    real(8),intent(out) :: KC(nConts,nop,nd)
+end subroutine integrals_build_exchange_cosx_batch_cs
+module subroutine integrals_build_exchange_cosx_batch_c2(nConts, nd, Lf, nop, Co, KC, KC2)
+    implicit none
+    integer,intent(in) :: nConts, nd, nop
+    real(8),intent(in) :: Lf(nConts,nop,nd), Co(nConts,nop)
+    real(8),intent(out) :: KC(nConts,nop,nd), KC2(nConts,nop,nd)
+end subroutine integrals_build_exchange_cosx_batch_c2
+module subroutine integrals_build_exchange_cosx_batch_c2g(nConts, nd, L1, L2, nop, Co, KC, KC2)
+    implicit none
+    integer,intent(in) :: nConts, nd, nop
+    real(8),intent(in) :: L1(nConts,nop,nd), L2(nConts,nop,nd), Co(nConts,nop)
+    real(8),intent(out) :: KC(nConts,nop,nd), KC2(nConts,nop,nd)
+end subroutine integrals_build_exchange_cosx_batch_c2g
+module subroutine integrals_build_exchange_cosx_batch_raw(nConts, nd, D, K)
+    implicit none
+    integer,intent(in) :: nConts, nd
+    real(8),intent(in) :: D(nConts,nConts,nd)
+    real(8),intent(out) :: K(nConts,nConts,nd)
+end subroutine integrals_build_exchange_cosx_batch_raw
+module subroutine cosx_set_resp_grid(name)
+character(len=*),intent(in) :: name
+end subroutine cosx_set_resp_grid
+
+module subroutine cosx_set_resp_relscreen(on)
+logical,intent(in) :: on
+end subroutine cosx_set_resp_relscreen
+
+module subroutine cosx_set_force_grid(name, nConts, eps, nsph)
+character(len=*),intent(in) :: name
+integer,intent(in) :: nConts, nsph
+real(8),intent(in) :: eps
+end subroutine cosx_set_force_grid
+
+module subroutine cosx_set_bra_kind(kind, nd)
+integer,intent(in) :: nd, kind(nd)
+end subroutine cosx_set_bra_kind
+
+module subroutine integrals_cosx_resp_cache_clear()
+    implicit none
+end subroutine integrals_cosx_resp_cache_clear
+module subroutine integrals_cosx_lr_fuse(omega, c)
+    implicit none
+    real(8),intent(in) :: omega, c
+end subroutine integrals_cosx_lr_fuse
 
 module subroutine cosx_set_force_kscreen(on)
     implicit none
@@ -519,7 +572,7 @@ module subroutine cosx_hess_a_term(natoms_in, d2E_a, d2E_b)
     real(8),intent(out) :: d2E_a(3,natoms_in,3,natoms_in), d2E_b(3,natoms_in,3,natoms_in)
 end subroutine cosx_hess_a_term
 
-module subroutine cosx_hess_exchange(nConts, natoms, Da, Db, RSomega, d2Ea, d2Eb, Kxa, Kxb, Cocca, Coccb)
+module subroutine cosx_hess_exchange(nConts, natoms, Da, Db, RSomega, d2Ea, d2Eb, Kxa, Kxb, Cocca, Coccb, lrcoef)
     implicit none
     integer,intent(in) :: nConts, natoms
     real(8),intent(in) :: Da(nConts,nConts), Db(nConts,nConts)
@@ -527,6 +580,7 @@ module subroutine cosx_hess_exchange(nConts, natoms, Da, Db, RSomega, d2Ea, d2Eb
     real(8),intent(out) :: d2Ea(3,natoms,3,natoms), d2Eb(3,natoms,3,natoms)
     real(8),intent(out),optional :: Kxa(nConts,nConts,3,natoms), Kxb(nConts,nConts,3,natoms)
     real(8),intent(in),optional :: Cocca(:,:), Coccb(:,:)
+    real(8),intent(in),optional :: lrcoef
 end subroutine cosx_hess_exchange
 
 module subroutine integrals_build_exchange_lr(nConts, Da, Db, Ka, Kb)
@@ -807,6 +861,43 @@ integer,intent(in) :: nConts_in, nb, nop
 real(8),intent(in) :: Lf(nConts_in,nop,nb), Co(nConts_in,nop)
 real(8),intent(out) :: JC(nConts_in,nop,nb)
 end subroutine df_build_coulomb_direct_batch_c
+module subroutine df_mdj_hess_b1(nConts_in, natoms_in, Ptot, own, nth, bvec, bx, ok)
+implicit none
+integer,intent(in) :: nConts_in, natoms_in, nth
+real(8),intent(in) :: Ptot(nConts_in,nConts_in)
+integer,intent(in) :: own(0:nBases-1,0:nBases-1)
+real(8),intent(out) :: bvec(nContsAux), bx(natoms_in,3,nContsAux)
+logical,intent(out) :: ok
+end subroutine df_mdj_hess_b1
+module subroutine df_mdj_hess_pass3(nConts_in, natoms_in, Ptot, cvec, own, nth, d2E_t, ok)
+implicit none
+integer,intent(in) :: nConts_in, natoms_in, nth
+real(8),intent(in) :: Ptot(nConts_in,nConts_in), cvec(nContsAux)
+integer,intent(in) :: own(0:nBases-1,0:nBases-1)
+real(8),intent(inout) :: d2E_t(3,natoms_in,3,natoms_in,nth)
+logical,intent(out) :: ok
+end subroutine df_mdj_hess_pass3
+module subroutine df_mdj_jx_prepare(cvec, H, ok)
+implicit none
+real(8),intent(in) :: cvec(nContsAux)
+real(8),allocatable,intent(out) :: H(:)
+logical,intent(out) :: ok
+end subroutine df_mdj_jx_prepare
+module subroutine df_mdj_jx_pair(ish, jsh, H, nat, SA, SB, nK, Klist, SK)
+implicit none
+integer,intent(in) :: ish, jsh, nat
+real(8),intent(in) :: H(*)
+real(8),intent(out) :: SA(*), SB(*), SK(*)
+integer,intent(out) :: nK, Klist(nat)
+end subroutine df_mdj_jx_pair
+module subroutine df_mdj_force_j(nConts_in, Ptot, natoms_in, force3c, cvec, ok)
+implicit none
+integer,intent(in) :: nConts_in, natoms_in
+real(8),intent(in) :: Ptot(nConts_in,nConts_in)
+real(8),intent(inout) :: force3c(natoms_in,3)
+real(8),intent(out) :: cvec(*)
+logical,intent(out) :: ok
+end subroutine df_mdj_force_j
 
 module subroutine ensure_df_built()
 implicit none
@@ -819,6 +910,15 @@ end subroutine df_store_release
 module subroutine df_store_restore()
 implicit none
 end subroutine df_store_restore
+
+module subroutine df_ensure_pair_tables()
+implicit none
+end subroutine df_ensure_pair_tables
+
+module subroutine df_fill_store_tensor(B)
+implicit none
+real(8),intent(out) :: B(df_total_pairs,nContsAux)
+end subroutine df_fill_store_tensor
 
 module subroutine build_df_metric_invhalf()
 implicit none
@@ -1069,6 +1169,63 @@ implicit none
 integer,intent(in) :: nbf
 real(8),intent(out) :: R(nbf,nbf,3)
 end subroutine integrals_dipole_ao
+
+module subroutine integrals_giao_1e(nbf, S1, H1)
+implicit none
+integer,intent(in) :: nbf
+real(8),intent(out) :: S1(nbf,nbf,3), H1(nbf,nbf,3)
+end subroutine integrals_giao_1e
+
+module subroutine integrals_nmr_nucleus(nbf, rn, PSO, A11, A01)
+implicit none
+integer,intent(in) :: nbf
+real(8),intent(in) :: rn(3)
+real(8),intent(out) :: PSO(nbf,nbf,3), A11(nbf,nbf,9), A01(nbf,nbf,9)
+end subroutine integrals_nmr_nucleus
+
+module subroutine integrals_giao_jk(nbf, D, Jx, Kx, do_k, omega)
+implicit none
+integer,intent(in) :: nbf
+real(8),intent(in) :: D(nbf,nbf)
+real(8),intent(out) :: Jx(nbf,nbf,3), Kx(nbf,nbf,3)
+logical,intent(in) :: do_k
+real(8),intent(in) :: omega
+end subroutine integrals_giao_jk
+
+module subroutine integrals_giao_charges(nbf, n, pos, q, H1x)
+implicit none
+integer,intent(in) :: nbf, n
+real(8),intent(in) :: pos(3,n), q(n)
+real(8),intent(out) :: H1x(nbf,nbf,3)
+end subroutine integrals_giao_charges
+
+module subroutine integrals_giao_ri_j(nbf, D, Jx)
+implicit none
+integer,intent(in) :: nbf
+real(8),intent(in) :: D(nbf,nbf)
+real(8),intent(out) :: Jx(nbf,nbf,3)
+end subroutine integrals_giao_ri_j
+
+module subroutine integrals_giao_cosx_k(nbf, D, nat, coor_bohr, Kx, nx, dx, Kdx)
+implicit none
+integer,intent(in) :: nbf, nat, nx
+real(8),intent(in) :: D(nbf,nbf), coor_bohr(3,nat), dx(nbf,nbf,nx)
+real(8),intent(out) :: Kx(nbf,nbf,3), Kdx(nbf,nbf,nx)
+end subroutine integrals_giao_cosx_k
+
+module subroutine integrals_ao_atom(nbf, ao_atom)
+implicit none
+integer,intent(in) :: nbf
+integer,intent(out) :: ao_atom(nbf)
+end subroutine integrals_ao_atom
+
+module subroutine integrals_k_general(nbf, nd, dm, K, omega)
+implicit none
+integer,intent(in) :: nbf, nd
+real(8),intent(in) :: dm(nbf,nbf,nd)
+real(8),intent(out) :: K(nbf,nbf,nd)
+real(8),intent(in) :: omega
+end subroutine integrals_k_general
 
 module subroutine integrals_dipole_pulay(nbf, natoms, ao_atom, Ptot, dpul)
 implicit none

@@ -73,7 +73,13 @@ real(8),allocatable :: env_g(:), buf(:), int_cache(:)
 integer,allocatable :: ao_offset(:)
 integer :: nenv, off_grids, ip, ish, jsh, di, dj, is, js, nmax
 integer :: g0, g1, ng, g, p, q, e1, e2, shls(4)
-real(8) :: w, nij
+real(8) :: w, nij, pscr
+real(8),allocatable :: pmax(:,:)
+character(32) :: pscr_env
+
+pscr = 0.0d0
+call get_environment_variable("ENGINE_ESP_PSCREEN", pscr_env)
+if (len_trim(pscr_env) > 0) read(pscr_env,*) pscr
 
 nenv = size(env)
 off_grids = nenv
@@ -97,6 +103,20 @@ do ish = 0,nBases-1
    nmax = max(nmax, cgto_engine(ish,bas))
 enddo
 
+allocate(pmax(0:nBases-1,0:nBases-1))
+pmax = 0.0d0
+do ish = 0,nBases-1
+   do jsh = ish,nBases-1
+      do q = 1,cgto_engine(jsh,bas)
+         do p = 1,cgto_engine(ish,bas)
+            e1 = ao_offset(ish) + p
+            e2 = ao_offset(jsh) + q
+            pmax(ish,jsh) = max(pmax(ish,jsh), abs(Ptot(e1,e2)*NorVEC(e1)*NorVEC(e2)))
+         enddo
+      enddo
+   enddo
+enddo
+
 !$omp parallel private(buf,int_cache,g0,g1,ng,ish,jsh,di,dj,is,js,shls,g,p,q,e1,e2,w,nij)
 allocate(buf(nmax*nmax*CHUNK), int_cache(INT_CACHE_SIZE))
 !$omp do schedule(dynamic)
@@ -108,6 +128,7 @@ do g0 = 1,npts,CHUNK
       di = cgto_engine(ish,bas)
       is = ao_offset(ish)
       do jsh = ish,nBases-1
+         if (pmax(ish,jsh) .lt. pscr) cycle
          dj = cgto_engine(jsh,bas)
          js = ao_offset(jsh)
          shls(1) = ish
@@ -136,7 +157,7 @@ enddo
 deallocate(buf, int_cache)
 !$omp end parallel
 
-deallocate(env_g, ao_offset)
+deallocate(env_g, ao_offset, pmax)
 end subroutine esp_at_grid_batch
 
 module subroutine cosmo_fock_batch(npts, grid_bohr, nq, Q, nao, F)

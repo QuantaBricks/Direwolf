@@ -49,45 +49,6 @@ xc_incr_primed  = .false.
 
 end subroutine xcgrid_free_derived
 
-subroutine xcgrid_refine()
-use GRID_info
-use MOL_info, only: engine_verbose
-use mod_meminfo, only: get_process_memory_bytes
-use mod_profile, only: prof_start, prof_stop, fmt_gb
-implicit none
-integer :: info
-integer(8) :: diag_rss, diag_hwm
-
-if (.not. xcgrid_dynamic)  return
-if (xcgrid_refined)        return
-if (xcgrid_level .eq. xcgrid_active_fine) return
-
-call xcgrid_free_derived()
-
-xcgrid_level        = xcgrid_active_fine
-xcgrid_refined      = .true.
-xcgrid_just_refined = .true.
-
-print *,"XC grid: promoting to production grid (coarse stage done)"
-if (engine_verbose .ge. 2) then
-   call get_process_memory_bytes(diag_rss, diag_hwm)
-   print '(A)', "  DIAG before production grid_gen: RSS="//trim(fmt_gb(real(diag_rss,8)/1024**3))//"GB"
-   call flush(6)
-endif
-
-call prof_start("grid_gen")
-call gridgen(info)
-call prof_stop("grid_gen")
-call prof_start("gto_eval")
-call GTOeval(info)
-call prof_stop("gto_eval")
-if (engine_verbose .ge. 2) then
-   call get_process_memory_bytes(diag_rss, diag_hwm)
-   print '(A)', "  DIAG after production grid_gen+GTOeval: RSS="//trim(fmt_gb(real(diag_rss,8)/1024**3))//"GB"
-endif
-
-end subroutine xcgrid_refine
-
 subroutine xcgrid_theory_refine()
 use GRID_info
 implicit none

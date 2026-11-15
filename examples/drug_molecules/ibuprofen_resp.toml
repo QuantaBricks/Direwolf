@@ -46,18 +46,18 @@
   molden_read_file = ""
 
 [cosmo]
-  cosmo_on = false
-  cosmo_epsilon = "78.4"
-  cosmo_radii_scale = "1.2"
-  cosmo_avg_area = "0.3"
-  cosmo_sigma_rav = "0.5"
-  cosmo_cavity_type = "gepol"
-  cosmo_rsolv = "0.0"
-  cosmo_ks_nseg = 92
-  cosmo_ks_nface = 1082
-  cosmo_sigma_profile_file = ""
-  cosmo_solvent = ""
-  cosmo_smd = false
+  on = false
+  epsilon = "78.4"
+  radii_scale = "1.2"
+  avg_area = "0.3"
+  sigma_rav = "0.5"
+  cavity_type = "gepol"
+  rsolv = "0.0"
+  ks_nseg = 92
+  ks_nface = 1082
+  sigma_profile_file = ""
+  solvent = ""
+  smd = false
 
 [environment]
   ENGINE_RESP_DUMP = "/tmp/claude-1000/-home-xchen-Work-Engine/1c11a618-2f52-4fd3-acf4-473fddb7c220/scratchpad/eng_resp"

@@ -6,8 +6,7 @@
 module mod_opt_hessian
 use mod_engine_input_types, only: engine_input_t
 use mod_engineup_interface, only: EngineUp
-use mod_hessian_freq, only: freq_unit, freq_mult, freq_base, freq_thermo
-use mod_integrals, only: freq_request, hessian_return
+use mod_engine_options, only: engine_options_t
 use mod_engine_input_elements, only: elem_to_name
 use mod_internal_coords, only: ic_set_t, ic_nprim, ic_values, ic_bmatrix, ic_ginv, &
                                 ic_lindh_hessian
@@ -116,17 +115,20 @@ if (.not. ok) write(out_unit,'(A)') '[OPT] xtb Hessian: '//trim(dir)//'/hessian 
 end subroutine hessian_from_xtb
 
 subroutine hessian_analytic(spec, g3, nat, out_unit, scf_lvl_in, dens_in_a, dens_in_b, &
-                            dens_out_a, dens_out_b, Hout, ok)
+                            dens_out_a, dens_out_b, stem, Hout, ok &
+                            )
 type(engine_input_t), intent(in) :: spec
 integer, intent(in) :: nat, out_unit, scf_lvl_in
 real(8), intent(in) :: g3(3,nat)
 real(8), allocatable, intent(inout) :: dens_in_a(:,:), dens_in_b(:,:), dens_out_a(:,:), dens_out_b(:,:)
+character(len=*), intent(in) :: stem
 real(8), intent(out) :: Hout(3*nat,3*nat)
 logical, intent(out) :: ok
+type(engine_options_t) :: opts
 integer, allocatable :: atomchg_a(:)
 real(8), allocatable :: coord_a(:,:), force_out(:,:), MLcharge_out(:)
 real(8), allocatable :: pc_charge_a(:), pc_coord_a(:,:)
-integer :: k, usave, unull, iconv
+integer :: k, unull, iconv
 real(8) :: energy_out, econv, mem_grid_gb, mem_2e_gb
 allocate(atomchg_a(nat), coord_a(nat,3), force_out(nat,3), MLcharge_out(nat))
 allocate(pc_charge_a(max(spec%npc,1)), pc_coord_a(max(spec%npc,1),3))
@@ -144,13 +146,18 @@ do k = 1, nat
    coord_a(k,2) = g3(2,k) * BOHR2ANG
    coord_a(k,3) = g3(3,k) * BOHR2ANG
 enddo
-usave = freq_unit
 open(newunit=unull, file='/dev/null', status='old', action='write')
-freq_unit = unull
-freq_mult = spec%imult
-freq_thermo = .false.
-freq_request = .true.
-hessian_return = .true.
+opts%quiet = .true.
+opts%force_dense_allow = .false.
+opts%verbose = spec%verbose
+opts%cosmo_cpcm = trim(spec%cosmo_convention) == 'cpcm'
+opts%freq_unit = unull
+opts%freq_mult = spec%imult
+opts%freq_thermo = .false.
+opts%freq_base = stem
+opts%freq = .true.
+opts%hessian_return = .true.
+do
 call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
               coord_a, atomchg_a, spec%baselabel, spec%ecplabel, &
               spec%atom_basis, spec%atom_ecp, &
@@ -165,15 +172,17 @@ call EngineUp(spec%ncenters, spec%imult, spec%icharge, spec%functional, &
               spec%cosmo_smd, trim(spec%cosmo_solvent), &
               force_out, energy_out, MLcharge_out, iconv, econv, &
               mem_grid_gb, mem_2e_gb, scf_lvl_in, trim(spec%basedir), &
-              dens_in_a, dens_in_b, dens_out_a, dens_out_b)
-freq_request = .false.
-hessian_return = .false.
-freq_thermo = .true.
-freq_unit = usave
+              dens_in_a, dens_in_b, dens_out_a, dens_out_b, opts)
+if (.not. opts%uks_restart) exit
+opts%uks_restart = .false.
+opts%uks = .true.
+call move_alloc(dens_out_a, dens_in_a)
+call move_alloc(dens_out_b, dens_in_b)
+enddo
 close(unull)
 ok = .false.
 if (iconv /= 1) return
-call read_ext_hessian(trim(freq_base)//'.hess', 3*nat, Hout, ok, out_unit, raw=.true.)
+call read_ext_hessian(trim(stem)//'.hess', 3*nat, Hout, ok, out_unit, raw=.true.)
 end subroutine hessian_analytic
 
 subroutine read_ext_hessian(path, n, H, ok, out_unit, raw)

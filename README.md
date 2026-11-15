@@ -22,6 +22,7 @@ OpenBLAS, the D3/D4 dispersion chain) is vendored as source under
 `third_party/` and built automatically on the first `make` - expect a
 few minutes the first time, fast afterwards. Produces `./Direwolf`.
 
+
 Or with Docker (`Dockerfile` in the repo root):
 
 ```
@@ -92,6 +93,7 @@ Other methods, documented in their own sections below:
 
 ## Input file format
 
+The native format is a Fortran namelist (below).
 
 Fortran namelist. Working examples: `examples/friendly_format/`,
 `examples/drug_molecules/`, `examples/benchmark_accuracy/`,
@@ -136,6 +138,7 @@ input is just `functional` + `baselabel` + `&atoms`.
 | `n_threads` | `0` | OpenMP threads; `0` = leave `OMP_NUM_THREADS` alone |
 | `verbose` | `1` | `0` quiet, `1` normal, `2` debug |
 | `resp_charges_on` | `.true.` | two-stage RESP atomic charges after SCF (see "RESP charges") |
+| `cube` | `''` | `'den'`, `'esp'`, `'esp_exact'` or a list such as `'den, esp'` (with RI-J on, `'esp'` takes the potential of the RI-J fitted density, rms 6e-4 Eh/e off the exact one and about 8x faster; `'esp_exact'` uses the exact density): Gaussian cube files `<base>.den.cube` (electron density, e/bohr^3) and `<base>.esp.cube` (electrostatic potential, Eh/e) of the converged wavefunction, written in a single-point run (not in an optimization step). Grid: 6 bohr around the molecule, 0.2 bohr spacing, coarser for large molecules (at most ~3e6 points); nuclei at their effective charge with an ECP, valence density only. With `tddft_nroots` the list may also hold TDDFT density requests `kind:state` (`diff:1`, `hole:2`, `elec:2`, `trans:1`; the key `tddft_cube` is accepted for the same list), written as `<base>.s<state>.<kind>.cube`; `'none'` skips the hole / electron analysis. In an optimization or an IRC the files belong to the last frame; `'all'` in the list (`'den, esp, all'`) writes them for every cycle / IRC point (`<base>.c001.den.cube`, `<base>.ts...`, `<base>.f001...`, `<base>.b001...`) |
 | `ncenters` | `0` | atom count; `0` = infer from `&atoms` line count |
 | `unit` | `'angstrom'` | `'angstrom'` or `'bohr'` (applies to `&atoms`) |
 | `basedir` | `''` | directory to resolve `data/` against; `''` = built-in |
@@ -155,21 +158,22 @@ density-matrix warm start to/from a file.
 **`&molden`** — `molden_write` / `molden_read` (`.false.`), `molden_file` /
 `molden_read_file` (`''`).
 
-**`&cosmo`** (implicit solvation; all inert unless `cosmo_on`)
+**`&cosmo`** (implicit solvation; all inert unless `on`). The keys carry no `cosmo_` prefix; the old spelling (`cosmo_solvent`, `cosmo_smd`, ...) is still read, in the namelist and in TOML.
 
 | tag | default | meaning |
 |---|---|---|
-| `cosmo_on` | `.false.` | enable COSMO |
-| `cosmo_solvent` | `''` | named solvent (`'water'`, …); sets the dielectric |
-| `cosmo_epsilon` | `78.4` | dielectric (ignored if `cosmo_solvent` set) |
-| `cosmo_radii_scale` | `1.2` | Bondi-radius multiplier for the cavity |
-| `cosmo_avg_area` | `0.3` | target tessera area, Å² |
-| `cosmo_cavity_type` | `'gepol'` | only `'gepol'` (has an analytic force) |
-| `cosmo_smd` | `.false.` | add the SMD non-electrostatic term (needs `gepol`) |
-| `cosmo_rsolv` | `0.0` | solvent probe radius |
-| `cosmo_sigma_rav` | `0.5` | σ-profile averaging radius, Å |
-| `cosmo_sigma_profile_file` | `''` | write a σ-profile here |
-| `cosmo_ks_nseg` / `cosmo_ks_nface` | `92` / `1082` | Klamt-surface segmentation |
+| `on` | `.true.` | switch the solvent on; a `&cosmo` block (TOML: `[cosmo]` table) is already the switch, `on = .false.` inside it turns it off again. Without the block there is no solvent |
+| `solvent` | `''` | named solvent (`'water'`, …); sets the dielectric |
+| `epsilon` | `78.4` | dielectric (ignored if `solvent` set) |
+| `radii_scale` | `1.2` | Bondi-radius multiplier for the cavity |
+| `avg_area` | `0.3` | target tessera area, Å² |
+| `cavity_type` | `'gepol'` | only `'gepol'` (has an analytic force) |
+| `smd` | `.false.` | add the SMD non-electrostatic term (needs `gepol`) |
+| `convention` | `'cosmo'` | `'cosmo'`: Klamt's f = (eps-1)/(eps+0.5) and Bondi radii (the cavity of the COSMO-RS descriptors); `'cpcm'`: f = (eps-1)/eps and the modified Bondi hydrogen radius 1.10 A, the C-PCM convention of the other quantum chemistry programs - solvation energies of 8 small molecules in water agree with theirs to 0.05 % (mean ratio 0.9995, spread 0.002 against 0.875 +- 0.025 for `'cosmo'`), TDDFT excitation energies in water to 1e-3 eV. The TDDFT optical response uses the same f. With `smd` the SMD radii are used for the cavity and `'cpcm'` changes f only |
+| `rsolv` | `0.0` | solvent probe radius |
+| `sigma_rav` | `0.5` | σ-profile averaging radius, Å |
+| `sigma_profile_file` | `''` | write a σ-profile here |
+| `ks_nseg` / `ks_nface` | `92` / `1082` | Klamt-surface segmentation |
 
 
 **`&professional`** — advanced performance tuning (XC grid cache, COSX grid
@@ -316,25 +320,25 @@ a `resolve_basis_name` (`engine.f90`) case for a common-keyword alias.
 ## Solvation (implicit continuum: COSMO/CPCM electrostatics + SMD)
 
 See `docs/ARCHITECTURE.md`'s `src/solvent/` entry for the module
-layout. `&cosmo` namelist (all optional; `cosmo_on=.false.` is the
-default vacuum behavior):
+layout. `&cosmo` namelist (all optional; the block itself switches the solvent on,
+`on = .false.` inside it switches it off again, and without the block there is no solvent):
 
 ```
- cosmo_on          = .true./.false.  [default .false.]
- cosmo_solvent     = '<name>'        [default ''] e.g. 'water', 'methanol',
-                     'dmso', 'toluene', 'hexane' - overrides cosmo_epsilon
- cosmo_epsilon     = <real>          [default 78.4] ignored if cosmo_solvent set
- cosmo_cavity_type = 'gepol'         [default] analytic, has an analytic force -
+ on          = .true./.false.  [default .true. when the block is present]
+ solvent     = '<name>'        [default ''] e.g. 'water', 'methanol',
+                     'dmso', 'toluene', 'hexane' - overrides epsilon
+ epsilon     = <real>          [default 78.4] ignored if solvent set
+ cavity_type = 'gepol'         [default] analytic, has an analytic force -
                      use this for energy+force
                    | 'ks1993'        COSMO-RS sigma-profiles (energy-only)
                    | 'yk1999'        smooth polynomial switching (energy-only)
                    | 'iswig'         Lange-Herbert erf switching (energy-only)
- cosmo_radii_scale = <real>          [default 1.2] Bondi-radius multiplier
- cosmo_avg_area    = <real>          [default 0.3, Ang^2] gepol tessera area
- cosmo_sigma_rav   = <real>          [default 0.5, Ang] only if cosmo_sigma_profile_file set
- cosmo_sigma_profile_file = '<path>' [default '' = off]
- cosmo_smd         = .true./.false.  [default .false.] needs cosmo_cavity_type='gepol'
-                     + non-empty cosmo_solvent
+ radii_scale = <real>          [default 1.2] Bondi-radius multiplier
+ avg_area    = <real>          [default 0.3, Ang^2] gepol tessera area
+ sigma_rav   = <real>          [default 0.5, Ang] only if sigma_profile_file set
+ sigma_profile_file = '<path>' [default '' = off]
+ smd         = .true./.false.  [default .false.] needs cavity_type='gepol'
+                     + non-empty solvent
 ```
 
 Verified against Psi4 (CPCM) and pyscf (SMD's CDS term, bit-exact) -
@@ -355,15 +359,14 @@ H           0.7584         0.0000         0.5861
 H          -0.7584         0.0000         0.5861
 &end
 &cosmo
- cosmo_on          = .true.
- cosmo_cavity_type = 'gepol'
- cosmo_solvent     = 'water'
+ cavity_type = 'gepol'
+ solvent     = 'water'
 &end
 ```
 
-`cosmo_solvent = 'water'` sets `cosmo_epsilon` to water's dielectric
-constant automatically (no need to also set `cosmo_epsilon` yourself);
-`cosmo_cavity_type = 'gepol'` is the default and the only cavity type
+`solvent = 'water'` sets `epsilon` to water's dielectric
+constant automatically (no need to also set `epsilon` yourself);
+`cavity_type = 'gepol'` is the default and the only cavity type
 with an analytic force, so it's the right choice unless you're doing an
 energy-only COSMO-RS-style sigma-profile run (`'ks1993'`/`'yk1999'`/
 `'iswig'` above). See `examples/solvation/water_sigma_profile.inp` for
@@ -384,16 +387,15 @@ H           0.7584         0.0000         0.5861
 H          -0.7584         0.0000         0.5861
 &end
 &cosmo
- cosmo_on          = .true.
- cosmo_cavity_type = 'gepol'
- cosmo_solvent     = 'toluene'
- cosmo_smd         = .true.
+ cavity_type = 'gepol'
+ solvent     = 'toluene'
+ smd         = .true.
 &end
 ```
 
-`cosmo_smd = .true.` adds the SMD cavity-dispersion-solvent-structure
+`smd = .true.` adds the SMD cavity-dispersion-solvent-structure
 (CDS) term on top of the GePol/CPCM electrostatics above - it requires
-`cosmo_cavity_type = 'gepol'` and a non-empty `cosmo_solvent` (SMD's
+`cavity_type = 'gepol'` and a non-empty `solvent` (SMD's
 CDS parameterization is per-solvent, unlike the electrostatic part
 which only needs a dielectric constant). See `examples/solvation/water_smd_toluene.inp`.
 
@@ -445,6 +447,7 @@ converged geometry is also printed in the output as `[FINAL GEOMETRY]`.
 | `opt_coord` | `'ric'` | `'ric'` (redundant internals) or `'cart'` |
 | `opt_restart` | `.true.` | resume from `<output>.opt.xyz` if present |
 | `opt_hessian_file` | `''` | initial Cartesian Hessian to seed from instead of the Lindh model |
+| `opt_ts_follow` | `''` | with `opt_ts`: the mode to climb, picked by the motion it contains: `'bond 1 2'`, `'angle 1 2 3'`, `'dihedral 1 2 3 4'` (several separated by `;`, no signs: the mode that moves any of them most is taken) and/or `'atoms 1-3 7'` (the mode that moves those atoms most). Empty: the lowest mode at the start. |
 | `opt_write_ric` | `.false.` | dump the generated internal-coordinate set to `<output>.ric` |
 
 `opt_conv = 'tight'` also raises the SCF to `'tight'` automatically (an
@@ -466,9 +469,12 @@ and any `&opt` run raises the SCF to at least `'fine'`.
 it at the optimized geometry; `freq = .true.` is the older spelling). The output file gets `[FREQUENCIES]` (cm-1, translation/rotation
 modes first, imaginary modes negative), `[NORMALMODES]` (groups of three modes: frequencies, reduced
 masses, force constants, IR intensities in km/mol, per-atom Cartesian displacements), `[IR]`, `[DIPOLEDERIV]`, and
-`[THERMO]` (ZPE, thermal E/H/G corrections, entropy contributions at 298.15 K / 1 atm; ideal gas, rigid
+`[THERMO]` (ZPE, thermal E/H/G corrections, entropy contributions; ideal gas, rigid
 rotor, harmonic oscillator, quasi-RRHO vibrational entropy with the 100 cm-1 reference, automatic rotational
-symmetry number). Files named after the output (`water.out` ->): `water.hess` (Hessian),
+symmetry number). `freq_temp` (K, default 298.15) and `freq_pres` (atm, default 1) set the conditions; `freq_conc`
+(mol/L) replaces the pressure by a concentration standard state - `freq_conc = 1` gives the 1 mol/L free energy used
+for solution-phase reaction free energies, 1.894 kcal/mol above the 1 atm value at 298.15 K. The block names the
+standard state and lists the modes left out of the vibrational sums (imaginary ones and those at or below 1 cm-1). Files named after the output (`water.out` ->): `water.hess` (Hessian),
 `water.modes.csv` (per-mode, per-atom displacements) and `water.freq.molden` (animate in Molden/Jmol/Avogadro).
 
 Limitations: `K = 'RI'` is not supported
@@ -548,18 +554,18 @@ undefined.
 
 ## Third-party dependencies
 
-| Dependency | License | Linking |
-|---|---|---|
-| `third_party/libcint` | Apache-2.0 | Static (built from source by `make`) |
-| `third_party/libcint_ecp` | Apache-2.0 (vendored from PySCF) | Static (`lib/libcint_ecp.a`) |
-| `third_party/simple-dftd3` | **LGPL-3.0-or-later** | **Dynamic** (`libs-dftd3.so`, `-Wl,-rpath` at link time) |
-| `third_party/gcp` | **LGPL-3.0-or-later** | **Dynamic** (`libgcp.so`, `-Wl,-rpath` at link time) |
-| `third_party/dftd4` | **LGPL-3.0-or-later** | **Dynamic** (`libdftd4.so`, `-Wl,-rpath` at link time) |
-| `third_party/multicharge` | Apache-2.0 | Static (built from source by `make`) |
-| `third_party/mctc-lib` | Apache-2.0 | Static (built from source by `make`) |
-| `third_party/toml-f` | MIT / Apache-2.0 | Static (built from source by `make`) |
-| `third_party/OpenBLAS` | BSD-3-Clause | Static (built from source by `make`, pthread-threaded build) |
-| `third_party/libxc` | MPL-2.0 | Static (built from source by `make`) |
+| Dependency | Version | License | Linking |
+|---|---|---|---|
+| `third_party/libcint` | 6.1.3 | Apache-2.0 | Static (built from source by `make`) |
+| `third_party/libcint_ecp` | PySCF-vendored (no upstream version file) | Apache-2.0 (vendored from PySCF) | Static (`lib/libcint_ecp.a`) |
+| `third_party/simple-dftd3` | 1.4.0 | **LGPL-3.0-or-later** | **Dynamic** (`libs-dftd3.so`, `-Wl,-rpath` at link time) |
+| `third_party/gcp` | 2.3.2 | **LGPL-3.0-or-later** | **Dynamic** (`libgcp.so`, `-Wl,-rpath` at link time) |
+| `third_party/dftd4` | 4.2.0 | **LGPL-3.0-or-later** | **Dynamic** (`libdftd4.so`, `-Wl,-rpath` at link time) |
+| `third_party/multicharge` | 0.5.0 | Apache-2.0 | Static (built from source by `make`) |
+| `third_party/mctc-lib` | 0.5.2 | Apache-2.0 | Static (built from source by `make`) |
+| `third_party/toml-f` | 0.5.2 | MIT / Apache-2.0 | Static (built from source by `make`) |
+| `third_party/OpenBLAS` | 0.3.20 | BSD-3-Clause | Static (built from source by `make`, pthread-threaded build) |
+| `third_party/libxc` | 6.1.0 | MPL-2.0 | Static (built from source by `make`) |
 
 `simple-dftd3`/`gcp`/`dftd4` are the only copyleft ones, and each must
 stay dynamically linked for that reason (LGPL permits linking from a
@@ -653,7 +659,7 @@ angular quadrature and Treutler-Ahlrichs radial mapping
 CAM-B3LYP, wB97X-D, ...) are evaluated through **libxc**; cite the
 functional's own original paper and
 
-> S. Lehtola, C. Steigemann, M. J. T. Oliveira, M. A. L. Marques, *SoftwareX* **7**, 1 (2018).  (libxc)
+> S. Lehtola, C. Steigemann, M. J. T. Oliveira, M. A. L. Marques, *SoftwareX* **7**, 1 (2018).  (libxc 6.1.0, https://libxc.gitlab.io)
 
 **Underlying libraries** - integrals via **libcint** (Q. Sun,
 *J. Comput. Chem.* **36**, 1664 (2015)); D3/D4/gCP through the

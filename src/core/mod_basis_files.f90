@@ -8,10 +8,10 @@ implicit none
 private
 public :: basis_file_for_label, set_basis_dir_override
 
-integer,parameter :: NFAMILY = 11
+integer,parameter :: NFAMILY = 12
 character(len=20),parameter :: FAMILY_FILES(NFAMILY) = [character(len=20) :: &
    "631g.bas","6311g.bas","321g.bas","ccpv.bas","ccpv_jkfit.bas", &
-   "def2.bas","mtzvp.bas","vdzp.bas","lanl2dz.bas","lanl08.bas","sdd.bas"]
+   "def2.bas","mtzvp.bas","vdzp.bas","lanl2dz.bas","lanl08.bas","sdd.bas","pcj.bas"]
 
 character(len=512), save :: basis_dir = ''
 logical, save :: basis_dir_ready = .false.

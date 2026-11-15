@@ -15,31 +15,34 @@ subroutine EngineUp(ncenters,imult,icharge,functional_in,&
                     cosmo_smd,cosmo_solvent,&
                     force_out,energy_out,MLcharge_out,iconv,econv,&
                     mem_grid_gb,mem_2e_gb,scf_conv_level,basedir,&
-                    dens_in_a,dens_in_b,dens_out_a,dens_out_b)
+                    dens_in_a,dens_in_b,dens_out_a,dens_out_b,&
+                    opts)
 
 use MOL_info
 use GRID_info, only: Grids
-use GRID_info, only: xcgrid_dynamic, xcgrid_refined, xcgrid_level, &
+use GRID_info, only: xcgrid_level, &
                      xcgrid_theory_dynamic, xcgrid_theory_refined, &
                      force_dense_allow, &
                      XCGRID_RSCALE, XCGRID_SPH_IN, XCGRID_SPH_EDGE, &
                      xcgrid_switch_prms, XCGRID_COARSE, XCGRID_FINE, &
                      XCGRID_L4, XCGRID_L5, XCGRID_L6, XCGRID_L7, &
-                     xcgrid_active_coarse, xcgrid_active_fine, &
                      xc_direct_mode, XC_DIRECT_NCONTS, force_dense, force_dense_mgga, &
-                     xcgrid_default_level, xcgrid_tune_from_env, &
+                     xcgrid_tune_from_env, xcgrid_use_theory_table, xcgrid_nmr_active, &
                      xcgrid_audit_only, xcgrid_int_rho, &
                      xcgrid_radpot_rowscale, xcgrid_prune_orders, &
                      xcgrid_prune_dmin_bounds, xcgrid_prune_dmin_orders, &
                      xcgrid_lebedev_supported, &
                      grid_cache_mode, max_batch_nsig, grid_cache_capacity, ngrids
-use mod_integrals, only: resp_charges, mayer_request, calc_mayer_bond_orders, &
+use mod_integrals, only: resp_charges, mayer_bo, calc_mayer_bond_orders, esp_at_grid_batch, &
                           integrals_init, engine_use_df, engine_use_df_j, engine_use_df_k, &
                           engine_df_aux_basis, &
                           engine_estimate_only, integrals_estimate_aux_size, &
                           nRec, nContsAux, decide_df_force_mode, engine_puream, &
                           engine_harris_guess, calc_properties, engine_do_force, &
-                          hessian_run, freq_request, hessian_return, polar_request
+                          hessian_run
+use mod_engine_options, only: engine_options_t
+use mod_engine_report, only: rpt, report_reset
+use mod_hessian_freq, only: freq_unit, freq_mult, freq_thermo, freq_base, freq_temp, freq_pres
 use mod_meminfo, only: engine_mem_cap_bytes, engine_avail_at_start_bytes, get_memory_budget_bytes, get_process_memory_bytes, &
     release_free_memory
 use mod_xc, only: xc_select_functional, xc_uses_tau, xc_uses_vv10
@@ -52,8 +55,9 @@ use mod_dispersion_d3, only: dispersion_d3
 use mod_dispersion_d4, only: dispersion_d4
 use mod_gcp, only: gcp_correction
 use mod_profile, only: prof_reset, prof_start, prof_stop, prof_report, fmt_gb
-use mod_output_format, only: finalize_output_file
-use mod_molden, only: write_molden, read_molden
+use mod_output_format, only: finalize_output_file, print_distance_matrix
+use mod_molden, only: write_molden, read_molden, elem_symbol
+use mod_cube, only: write_cube_files
 use mod_cosmo, only: cosmo_enabled, cosmo_init, cosmo_report_sigma_profile, cosmo_finalize, &
                       cosmo_solvent_epsilon, cosmo_solvent_smd_params, cosmo_set_sigma_profile_debug, &
                       cosmo_write_dot_cosmo_file
@@ -111,6 +115,7 @@ integer,intent(in) :: scf_conv_level
 character(len=*),intent(in) :: basedir
 real(8),intent(in) :: dens_in_a(:,:), dens_in_b(:,:)
 real(8),intent(out),allocatable :: dens_out_a(:,:), dens_out_b(:,:)
+type(engine_options_t),intent(inout) :: opts
 real(8)    :: Emax,Erms,Pmax,Prms
 integer    :: itmax
 
@@ -136,11 +141,33 @@ if (n_threads .gt. 0) call omp_set_num_threads(n_threads)
 
 call openblas_set_num_threads(1)
 
+engine_verbose = opts%verbose ; engine_quiet = opts%quiet
+force_dense_allow = opts%force_dense_allow
+resp_charges_on = opts%resp_charges
+block
+   use mod_integrals, only: cosx_force_loose
+   use mod_cosmo, only: cosmo_set_cosmors_request
+   cosx_force_loose = opts%cosx_force_loose
+   call cosmo_set_cosmors_request(opts%cosmors_on, trim(opts%cosmors_file), trim(opts%cosmors_compound))
+end block
+block
+   use mod_cosmo_state, only: cosmo_cpcm
+   use mod_cosmo_radii, only: cavity_h_radius_ang
+   cosmo_cpcm = opts%cosmo_cpcm
+   cavity_h_radius_ang = merge(1.10d0, 0.0d0, opts%cosmo_cpcm)
+end block
 if (.not. engine_quiet) print *,"System cores available:",omp_get_num_procs(), &
         " Direwolf OpenMP threads in use:",omp_get_max_threads()
 call flush(6)
 
 call reset_engine_state()
+opts%uks_restart = .false.
+opts%done = .false.
+call report_reset(opts%progress)
+opts%rep = rpt
+freq_unit = opts%freq_unit ; freq_mult = opts%freq_mult ; freq_thermo = opts%freq_thermo
+freq_temp = opts%freq_temp ; freq_pres = opts%freq_pres
+freq_base = opts%freq_base
 call engine_startup_mark("reset_engine_state")
 call prof_reset()
 
@@ -350,6 +377,8 @@ do i = 1,Natoms
      if (index(adjustl(atoms(i)%base(4:)), 'def2') .eq. 1) &
         atoms(i)%ecpbase = atoms(i)%base(1:3)//'def2tzvpp'
   endif
+  if (index(adjustl(atoms(i)%ecpbase(4:)), 'def2') .eq. 1) &
+     atoms(i)%ecpbase = atoms(i)%ecpbase(1:3)//'def2tzvpp'
   atoms(i)%ecpCoreElec = ecp_core_electrons_prescan(atoms(i)%ecpbase)
   if (atoms(i)%ecpCoreElec > 0 .and. engine_verbose .ge. 2) then
      print *, "DEBUG: atom", i, "Z=", atoms(i)%charge, "base=", trim(atoms(i)%ecpbase), &
@@ -381,10 +410,23 @@ endif
 
 n_alpha = 0.5*(Multi-Charge+coreChg-1)
 n_beta = 0.5*(-Multi-Charge+coreChg+1)
+if (opts%uks .and. n_alpha == n_beta) Multi = 2
 
-if (.not. engine_quiet) &
+if (.not. engine_quiet) then
    call engine_startup_mark("before n_alpha")
    print '("n_alpha = ", I0, "   n_beta = ", I0, "   (# occupied alpha/beta electrons)")', n_alpha, n_beta
+endif
+
+if (.not. engine_quiet) then
+   block
+      character(len=2) :: dsym(ncenters)
+      integer :: ids
+      do ids = 1, ncenters
+         dsym(ids) = elem_symbol(atomchg(ids))
+      enddo
+      call print_distance_matrix(6, ncenters, dsym, transpose(coord))
+   end block
+endif
 
 allocate(linkMat(natoms,natoms))
 linkMat = 0
@@ -403,7 +445,7 @@ block
    integer :: hessstat
    hessenv = ""
    call get_environment_variable("ENGINE_HESSIAN_TOTAL_DEBUG", hessenv, status=hessstat)
-   hessian_run = (hessstat == 0) .or. freq_request .or. polar_request
+   hessian_run = (hessstat == 0) .or. opts%freq .or. opts%polar .or. opts%nmr .or. opts%tddft_nroots > 0
 end block
 
 call engine_startup_mark("before integrals_init")
@@ -430,113 +472,11 @@ if (HF_exchange_frac .lt. 1.0d0) then
          else
             xc_direct_mode = .true.
          endif
+         xcgrid_nmr_active = opts%nmr
          call xcgrid_tune_from_env(functional_grid)
-         xcgrid_active_coarse = XCGRID_COARSE
-         xcgrid_active_fine   = xcgrid_default_level(functional_grid)
-         if (xcgrid_active_fine .eq. XCGRID_L5) xcgrid_active_coarse = XCGRID_L4
-         call get_environment_variable("ENGINE_XC_GRID_LEVEL", dyngridenv)
-         if (len_trim(dyngridenv) .gt. 0) then
-            block
-              integer :: reqlvl
-              read(dyngridenv,*) reqlvl
-              select case (reqlvl)
-              case (2:7)
-                 xcgrid_active_fine   = reqlvl
-                 xcgrid_active_coarse = max(XCGRID_COARSE, reqlvl - 1)
-              case default
-                 print *,"ENGINE_XC_GRID_LEVEL: must be 2-7, ignoring"
-              end select
-            end block
-            print *,"ENGINE_XC_GRID_LEVEL override: active pair = (", &
-                    xcgrid_active_coarse,",",xcgrid_active_fine,")"
-         endif
-         block
-           logical :: split_override
-           split_override = .false.
-           call get_environment_variable("ENGINE_XC_GRID_LEVEL_COARSE", dyngridenv)
-           if (len_trim(dyngridenv) .gt. 0) then
-              block
-                integer :: reqlvl
-                read(dyngridenv,*) reqlvl
-                if (reqlvl .ge. 2 .and. reqlvl .le. 7) then
-                   xcgrid_active_coarse = reqlvl
-                   split_override = .true.
-                else
-                   print *,"ENGINE_XC_GRID_LEVEL_COARSE: must be 2-7, ignoring"
-                endif
-              end block
-           endif
-           call get_environment_variable("ENGINE_XC_GRID_LEVEL_FINE", dyngridenv)
-           if (len_trim(dyngridenv) .gt. 0) then
-              block
-                integer :: reqlvl
-                read(dyngridenv,*) reqlvl
-                if (reqlvl .ge. 2 .and. reqlvl .le. 7) then
-                   xcgrid_active_fine = reqlvl
-                   split_override = .true.
-                else
-                   print *,"ENGINE_XC_GRID_LEVEL_FINE: must be 2-7, ignoring"
-                endif
-              end block
-           endif
-           if (split_override) &
-              print *,"ENGINE_XC_GRID_LEVEL_COARSE/_FINE override: active pair = (", &
-                      xcgrid_active_coarse,",",xcgrid_active_fine,")"
-         end block
-         call get_environment_variable("ENGINE_XC_DYNGRID", dyngridenv)
-         if (len_trim(dyngridenv) .gt. 0) then
-            xcgrid_dynamic = (trim(dyngridenv) .eq. "1")
-         else
-            xcgrid_dynamic = (nconts .gt. XC_DIRECT_NCONTS)
-         endif
          has_warm_start = (size(dens_in_a,1) .gt. 0) .or. molden_read
-         xcgrid_refined = .false.
          xcgrid_theory_refined = .false.
-         if (xcgrid_dynamic .and. .not. has_warm_start) then
-            xcgrid_level = xcgrid_active_coarse
-            call get_environment_variable("ENGINE_XC_DYNGRID_RSCALE", dyngridenv)
-            if (len_trim(dyngridenv) .gt. 0) read(dyngridenv,*) XCGRID_RSCALE(xcgrid_active_coarse)
-            call get_environment_variable("ENGINE_XC_DYNGRID_SPH", dyngridenv)
-            if (len_trim(dyngridenv) .gt. 0) then
-               read(dyngridenv,*) XCGRID_SPH_IN(xcgrid_active_coarse)
-               select case (XCGRID_SPH_IN(xcgrid_active_coarse))
-               case (974) ; XCGRID_SPH_EDGE(xcgrid_active_coarse) = 590
-               case (434) ; XCGRID_SPH_EDGE(xcgrid_active_coarse) = 230
-               case (302) ; XCGRID_SPH_EDGE(xcgrid_active_coarse) = 170
-               case (230) ; XCGRID_SPH_EDGE(xcgrid_active_coarse) = 110
-               case (170) ; XCGRID_SPH_EDGE(xcgrid_active_coarse) = 110
-               case default
-                  print *,"ENGINE_XC_DYNGRID_SPH: unsupported order, ignoring"
-                  XCGRID_SPH_IN(xcgrid_active_coarse) = 302
-               end select
-            endif
-            call get_environment_variable("ENGINE_XC_PROD_SPH", dyngridenv)
-            if (len_trim(dyngridenv) .gt. 0) then
-               read(dyngridenv,*) XCGRID_SPH_IN(xcgrid_active_fine)
-               select case (XCGRID_SPH_IN(xcgrid_active_fine))
-               case (974) ; XCGRID_SPH_EDGE(xcgrid_active_fine) = 590
-               case (590) ; XCGRID_SPH_EDGE(xcgrid_active_fine) = 434
-               case (434) ; XCGRID_SPH_EDGE(xcgrid_active_fine) = 230
-               case (302) ; XCGRID_SPH_EDGE(xcgrid_active_fine) = 170
-               case (230) ; XCGRID_SPH_EDGE(xcgrid_active_fine) = 110
-               case (194) ; XCGRID_SPH_EDGE(xcgrid_active_fine) = 110
-               case default
-                  print *,"ENGINE_XC_PROD_SPH: unsupported order, ignoring"
-                  XCGRID_SPH_IN(xcgrid_active_fine) = 434
-               end select
-            endif
-            call get_environment_variable("ENGINE_XC_PROD_RSCALE", dyngridenv)
-            if (len_trim(dyngridenv) .gt. 0) read(dyngridenv,*) XCGRID_RSCALE(xcgrid_active_fine)
-            call get_environment_variable("ENGINE_XC_DYNGRID_PRMS", dyngridenv)
-            if (len_trim(dyngridenv) .gt. 0) read(dyngridenv,*) xcgrid_switch_prms
-            if (engine_verbose .ge. 2) &
-               print '(A,F5.3,A,I0,A,ES9.2)',"  Two-stage XC grid: coarse rscale=", &
-                       XCGRID_RSCALE(xcgrid_active_coarse)," sph=",XCGRID_SPH_IN(xcgrid_active_coarse), &
-                       " promote at dP <",xcgrid_switch_prms
-         else
-            xcgrid_level = xcgrid_active_fine
-            xcgrid_refined = .true.
-         endif
+         xcgrid_level = XCGRID_FINE
          if (xc_uses_vv10()) then
             call get_environment_variable("ENGINE_VV10_DYNGRID", dyngridenv)
             if (len_trim(dyngridenv) .gt. 0) then
@@ -777,8 +717,50 @@ end select
 itmax =150
 call engine_startup_mark("before SCFcycle")
 call prof_start("scf_total")
-call SCFcycle(info,Emax,Pmax,itmax,iconv,econv,do_force)
+block
+   call SCFcycle(info,Emax,Pmax,itmax,iconv,econv,do_force,opts%nmr .or. opts%cosx_hi_reconverge)
+end block
 call prof_stop("scf_total")
+block
+   use mod_scf_history, only: scf_hist_niter, scf_hist_last_prms, scf_hist_last_de, scf_hist_last_exc, &
+        scf_hist_last_ecoul, scf_hist_last_exact_exchange, scf_hist_last_hcore, scf_hist_last_erep
+   use mod_vv10, only: vv10_report
+   opts%scf_niter = scf_hist_niter() ; opts%scf_dP = scf_hist_last_prms() ; opts%scf_dE = scf_hist_last_de()
+   opts%e_hcore = scf_hist_last_hcore() ; opts%e_coul = scf_hist_last_ecoul()
+   opts%e_exx = scf_hist_last_exact_exchange() ; opts%e_xc = scf_hist_last_exc() ; opts%e_nuc = scf_hist_last_erep()
+   call vv10_report(opts%e_vv10, opts%vv10_used)
+end block
+block
+   use mod_tddft, only: tddft_stability
+   use mod_cosmo_state, only: cosmo_enabled
+   character(len=8) :: sme
+   integer :: smode, smios, snit
+   real(8) :: lam_t
+   smode = 0
+   call get_environment_variable("ENGINE_STABILITY", sme)
+   if (len_trim(sme) > 0) read(sme, *, iostat=smios) smode
+   if (smode >= 1 .and. Multi == 1 .and. iconv == 1 .and. .not. cosmo_enabled) then
+      call tddft_stability(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, .true., lam_t, snit)
+      print '(A,ES11.3,A,I2,A)', ' STABILITY (RKS -> UKS, triplet-type): lowest eigenvalue of A+B =', lam_t, &
+            '  (', snit, ' Davidson steps)'
+      if (lam_t < -1.0d-3) then
+         print '(A)', ' STABILITY (RKS -> UKS): the restricted solution is UNSTABLE toward an unrestricted one'
+         if (smode >= 2) then
+            opts%uks_restart = .true.
+            opts%uks_lambda = lam_t
+            energy_out = E
+            force_out = 0.0d0 ; MLcharge_out = 0.0d0
+            mem_grid_gb = 0.0d0 ; mem_2e_gb = 0.0d0
+            allocate(dens_out_a(nConts,nConts), dens_out_b(nConts,nConts))
+            dens_out_a = Pa ; dens_out_b = Pb
+            return
+         endif
+         print '(A)', '                        (stability = 2 redoes the run unrestricted)'
+      else
+         print '(A)', ' STABILITY (RKS -> UKS): stable'
+      endif
+   endif
+end block
 block
    character(len=8) :: esm
    character(len=16) :: spid
@@ -906,6 +888,8 @@ allocate(dens_out_a(nConts,nConts), dens_out_b(nConts,nConts))
 dens_out_a = Pa
 dens_out_b = Pb
 if (molden_write .and. iconv .eq. 1) call write_molden(molden_file)
+if (iconv .eq. 1 .and. (.not. engine_quiet .or. opts%cube_every) .and. (opts%cube_den .or. opts%cube_esp)) &
+   call write_cube_files(trim(opts%freq_base), opts%cube_den, opts%cube_esp, opts%cube_esp_exact)
 
 block
    use mod_integrals, only: integrals_hessian_debug_check2e_direct
@@ -1402,16 +1386,246 @@ block
       call cphf_debug_grad_check(Nconts, Natoms, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac)
       stop
    endif
-   if (polar_request .and. iconv == 1) then
+   if (opts%nmr .and. iconv == 1) then
       block
          use mod_cosmo_state, only: cosmo_enabled
+         use mod_nmr, only: nmr_shielding, nmr_isotropy_anisotropy
+         use mod_nics, only: nics_setup
+         use mod_molden, only: elem_symbol
+         use mod_json_out, only: json_nmr, json_jcoupling, json_nics
+         use mod_engine_report, only: report_energy_only
+         use omp_lib, only: omp_get_wtime
+         real(8),allocatable :: sdia(:,:,:), spara(:,:,:), cn(:,:)
+         character(len=2),allocatable :: sym(:)
+         real(8) :: tot(3,3), iso, ani, tn0, pvn(3)
+         integer :: ia_n, ib_n, niter_n, kk_n
+         integer :: np_n, nring_n, zn_n(Natoms)
+         real(8),allocatable :: pos_n(:,:), nrm_n(:,:), sdp_n(:,:,:), spp_n(:,:,:)
+         character(len=40),allocatable :: lab_n(:)
+         integer,allocatable :: ring_n(:), ratm_n(:,:), rsz_n(:)
+         logical :: ok_n
+         character(len=160) :: msg_n
+         tn0 = omp_get_wtime()
+         allocate(sdia(3,3,Natoms), spara(3,3,Natoms), cn(3,Natoms), sym(Natoms))
+         do ia_n = 1,Natoms
+            cn(:,ia_n) = atoms(ia_n)%coor*ans2bohr
+            sym(ia_n) = elem_symbol(atoms(ia_n)%charge)
+            zn_n(ia_n) = atoms(ia_n)%charge
+         enddo
+         np_n = 0
+         if (len_trim(opts%nics) > 0) then
+            call nics_setup(opts%nics, Natoms, zn_n, cn, np_n, pos_n, lab_n, nrm_n, ring_n, ratm_n, rsz_n, nring_n, ok_n, msg_n)
+            if (.not. ok_n) then
+               print '(A)', 'Input error: '//trim(msg_n)
+               stop 1
+            endif
+         else
+            allocate(pos_n(3,1))
+         endif
+         allocate(sdp_n(3,3,max(np_n,1)), spp_n(3,3,max(np_n,1)))
+         if (n_alpha /= n_beta .or. Multi /= 1) then
+            call nmr_shielding(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, Natoms, cn, sdia, spara, niter_n, &
+                               HF_exchange_frac < 1.0d0, engine_use_df_j, nocc_b=n_beta, C_b=C_b, eLev_b=eLev_b, &
+                               nprobe=np_n, probe_bohr=pos_n, sdia_p=sdp_n, spara_p=spp_n)
+         else
+            call nmr_shielding(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, Natoms, cn, sdia, spara, niter_n, &
+                               HF_exchange_frac < 1.0d0, engine_use_df_j, &
+                               nprobe=np_n, probe_bohr=pos_n, sdia_p=sdp_n, spara_p=spp_n)
+         endif
+         print '(A)', '[NMR]'
+         print '(A)', 'Magnetic shielding tensors (ppm), GIAO; sigma_ab = d2E/dB_a dm_b'
+         print '(A)', ''
+         print '(A)', '  atom  elem   isotropic   anisotropy   diamagnetic   paramagnetic'
+         do ia_n = 1,Natoms
+            tot = sdia(:,:,ia_n) + spara(:,:,ia_n)
+            call nmr_isotropy_anisotropy(tot, iso, ani, pvn)
+            print '(I6,2X,A4,4F13.3)', ia_n, sym(ia_n), iso, ani, (sdia(1,1,ia_n)+sdia(2,2,ia_n)+sdia(3,3,ia_n))/3.0d0, &
+                  (spara(1,1,ia_n)+spara(2,2,ia_n)+spara(3,3,ia_n))/3.0d0
+         enddo
+         if (engine_verbose >= 2) then
+            do ia_n = 1,Natoms
+               tot = sdia(:,:,ia_n) + spara(:,:,ia_n)
+               print '(A,I0,A,A)', 'Atom ', ia_n, ' ', sym(ia_n)
+               do kk_n = 1,3
+                  print '(A,3F14.4)', '   ', (tot(kk_n,ib_n), ib_n = 1,3)
+               enddo
+            enddo
+         endif
+         print '(A,I0)', 'Coupled-perturbed iterations: ', niter_n
+         print '(A,F10.1)', 'Wall time (s): ', omp_get_wtime() - tn0
+         call report_energy_only(E)
+         call json_nmr(Natoms, sym, sdia, spara, niter_n)
+         print '(A)', '[NMREND]'
+         call flush(6)
+         if (np_n > 0) then
+            block
+               real(8) :: tp(3,3), niso(np_n), nzz(np_n)
+               integer :: ip, ir
+               do ip = 1,np_n
+                  tp = sdp_n(:,:,ip) + spp_n(:,:,ip)
+                  niso(ip) = -(tp(1,1) + tp(2,2) + tp(3,3))/3.0d0
+                  nzz(ip) = -sum(matmul(nrm_n(:,ip), tp)*nrm_n(:,ip))
+               enddo
+               print '(A)', '[NICS]'
+               print '(A)', 'Nucleus-independent chemical shifts, NICS = -sigma (ppm); zz along the ring normal (lab z for a point)'
+               print '(A)', ''
+               if (nring_n > 0) then
+                  print '(A)', '  ring  size  atoms                      NICS(0)  NICS(0)zz   NICS(+1)   NICS(-1)  '// &
+                        'NICS(1)avg  NICS(1)zz'
+                  do ir = 1,nring_n
+                     block
+                        character(len=60) :: al
+                        integer :: ja
+                        al = ''
+                        do ja = 1,rsz_n(ir)
+                           write(al(len_trim(al)+merge(1,2,len_trim(al) == 0):), '(I0)') ratm_n(ja,ir)
+                        enddo
+                        print '(I6,I6,2X,A24,6F11.3)', ir, rsz_n(ir), al(1:24), niso(3*ir-2), nzz(3*ir-2), &
+                              niso(3*ir-1), niso(3*ir), &
+                              0.5d0*(niso(3*ir-1) + niso(3*ir)), 0.5d0*(nzz(3*ir-1) + nzz(3*ir))
+                     end block
+                  enddo
+               else
+                  print '(A)', '  point       x         y         z (Angstrom)       NICS      NICS_zz'
+                  do ip = 1,np_n
+                     print '(I7,3F10.4,2F12.3)', ip, pos_n(:,ip)/ans2bohr, niso(ip), nzz(ip)
+                  enddo
+               endif
+               print '(A)', '[NICSEND]'
+               call json_nics(np_n, lab_n, pos_n/ans2bohr, niso, nzz)
+            end block
+            call flush(6)
+         endif
+         if (opts%nmr_j .and. n_alpha == n_beta .and. Multi == 1) then
+            block
+               use mod_jcoupling, only: jcoupling_fc, jcoupling_pso_sd, jcoupling_dso, jcoupling_to_hz_all, gyromagnetic_ratio
+               real(8),allocatable :: Sj(:,:), Spso(:,:), Ssd(:,:), Dso(:,:), Jf(:,:), Js(:,:), Jp(:,:), Jd(:,:)
+               real(8),allocatable :: Jt(:,:), Kr(:,:)
+               integer :: nj, nj2, zj(Natoms)
+               logical :: w_fc, w_sd, w_pso, w_dso
+               character(len=40) :: tl
+               character(len=64) :: al, tok
+               logical, allocatable :: insel(:)
+               integer, allocatable :: sel(:)
+               real(8), allocatable :: cs_(:,:), Ss_(:,:), Sp_(:,:), Sd_(:,:)
+               integer :: ns, ic, ir, i1, i2, ios
+               tl = ',' // trim(opts%nmr_j_terms) // ','
+               w_fc = trim(opts%nmr_j_terms) == 'all' .or. index(tl, ',fc,') > 0
+               w_sd = trim(opts%nmr_j_terms) == 'all' .or. index(tl, ',sd,') > 0
+               w_pso = trim(opts%nmr_j_terms) == 'all' .or. index(tl, ',pso,') > 0
+               w_dso = trim(opts%nmr_j_terms) == 'all' .or. index(tl, ',dso,') > 0
+               allocate(Sj(Natoms,Natoms), Spso(Natoms,Natoms), Ssd(Natoms,Natoms), Dso(Natoms,Natoms))
+               allocate(Jf(Natoms,Natoms), Js(Natoms,Natoms), Jp(Natoms,Natoms), Jd(Natoms,Natoms))
+               allocate(Jt(Natoms,Natoms), Kr(Natoms,Natoms))
+               Sj = 0.0d0 ; Spso = 0.0d0 ; Ssd = 0.0d0 ; Dso = 0.0d0 ; nj = 0 ; nj2 = 0
+               do ia_n = 1,Natoms
+                  zj(ia_n) = atoms(ia_n)%charge
+               enddo
+               allocate(insel(Natoms))
+               insel = (trim(opts%nmr_j_atoms) == 'all')
+               if (trim(opts%nmr_j_atoms) /= 'all') then
+                  al = trim(opts%nmr_j_atoms)
+                  do while (len_trim(al) > 0)
+                     ic = index(al, ',')
+                     if (ic == 0) ic = len_trim(al) + 1
+                     tok = al(1:ic-1)
+                     al = al(min(ic+1, len(al)):)
+                     if (len_trim(tok) == 0) cycle
+                     ir = index(tok, '-')
+                     if (ir > 0) then
+                        read(tok(1:ir-1), *, iostat=ios) i1
+                        if (ios == 0) read(tok(ir+1:), *, iostat=ios) i2
+                     else
+                        read(tok, *, iostat=ios) i1
+                        i2 = i1
+                     endif
+                     if (ios /= 0 .or. i1 < 1 .or. i2 > Natoms .or. i1 > i2) &
+                        error stop "jcoupling_atoms: 'all' or atom numbers and ranges such as 1,3-5"
+                     insel(i1:i2) = .true.
+                  enddo
+               endif
+               do ia_n = 1,Natoms
+                  if (gyromagnetic_ratio(zj(ia_n)) == 0.0d0) insel(ia_n) = .false.
+               enddo
+               ns = count(insel)
+               allocate(sel(ns))
+               ns = 0
+               do ia_n = 1,Natoms
+                  if (insel(ia_n)) then
+                     ns = ns + 1
+                     sel(ns) = ia_n
+                  endif
+               enddo
+               if (ns > 0) then
+                  allocate(cs_(3,ns), Ss_(ns,ns))
+                  do ia_n = 1,ns
+                     cs_(:,ia_n) = cn(:,sel(ia_n))
+                  enddo
+                  if (w_fc) then
+                     call jcoupling_fc(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, ns, cs_, Ss_, nj)
+                     Sj(sel,sel) = Ss_
+                  endif
+                  if (w_pso .or. w_sd) then
+                     allocate(Sp_(ns,ns), Sd_(ns,ns))
+                     call jcoupling_pso_sd(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, ns, cs_, &
+                                           w_pso, w_sd, Sp_, Sd_, nj2)
+                     Spso(sel,sel) = Sp_ ; Ssd(sel,sel) = Sd_
+                  endif
+                  if (w_dso) then
+                     call jcoupling_dso(Nconts, Pa, Pb, ns, cs_, Ss_)
+                     Dso(sel,sel) = Ss_
+                  endif
+               endif
+               call jcoupling_to_hz_all(Natoms, zj, Sj, Ssd, Spso, Dso, Jf, Js, Jp, Jd, Jt, Kr)
+               print '(A)', '[JCOUPLING]'
+               print '(A)', 'Indirect spin-spin coupling, Ramsey terms: FC Fermi contact, SD spin-dipole,'
+               print '(A)', 'PSO paramagnetic spin-orbit, DSO diamagnetic spin-orbit'
+               print '(A)', 'Terms included: '//trim(opts%nmr_j_terms)
+               print '(A,I0,A)', 'Nuclei taking part: ', ns, ' (jcoupling_atoms = '//trim(opts%nmr_j_atoms)//')'
+               print '(A)', 'Isotopes: 1H 13C 15N 17O 19F 29Si 31P 33S 35Cl and 7Li; J in Hz, K reduced, 1e19 T^2/J'
+               print '(A,I0)', 'Response iterations (triplet, singlet): ', max(nj, 0)
+               print '(A)', ''
+               print '(A)', '  atom  atom   elem  elem   J_total  K_reduced        FC        SD       PSO       DSO'
+               do ia_n = 1,Natoms
+                  do ib_n = ia_n+1,Natoms
+                     if (Jt(ia_n,ib_n) /= 0.0d0 .or. Jf(ia_n,ib_n) /= 0.0d0) &
+                        print '(2I6,2X,A4,2X,A4,2F11.3,4F10.3)', ia_n, ib_n, sym(ia_n), sym(ib_n), Jt(ia_n,ib_n), Kr(ia_n,ib_n), &
+                              Jf(ia_n,ib_n), Js(ia_n,ib_n), Jp(ia_n,ib_n), Jd(ia_n,ib_n)
+                  enddo
+               enddo
+               call json_jcoupling(Natoms, Jt, Kr, Jf, Js, Jp, Jd, opts%nmr_j_terms)
+               print '(A)', '[JCOUPLINGEND]'
+            end block
+         endif
+      end block
+   endif
+   if (opts%polar .and. iconv == 1) then
+      block
+         use mod_cosmo_state, only: cosmo_enabled
+         use mod_engine_report, only: report_polar, report_polar_dynamic, report_energy_only
+         use mod_engine_input_types, only: parse_polar_omega
+         use mod_cosmo_state, only: cosmo_enabled, f_eps, cosmo_cpcm
+         use mod_cosmo_hessian, only: cosmo_hess_active
+         use omp_lib, only: omp_get_wtime
          real(8) :: alpha(3,3), aiso, aani
          real(8), parameter :: AU2ANG3 = 0.148184711d0
-         integer :: niter_p, ip, jp
+         integer :: niter_p, ip, jp, iom, nom
+         real(8) :: om(16), ad(3,3), adiso, adani
+         logical :: omok
+         real(8) :: tp0, f_eps_static_p
          character(len=1), parameter :: ax(3) = (/ 'x', 'y', 'z' /)
-         if (n_alpha /= n_beta) error stop 'polarizability: open-shell references are not implemented'
-         if (cosmo_enabled) error stop 'polarizability: solvent models are not implemented'
-         call cphf_solve_efield(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, alpha, niter_p)
+         tp0 = omp_get_wtime()
+         if (Multi /= 1) error stop 'polarizability: open-shell references are not implemented'
+         f_eps_static_p = f_eps
+         if (cosmo_enabled) cosmo_hess_active = .true.
+         if (RS_omega > 0.0d0 .and. .not. cosx_enabled) then
+            block
+               use mod_tddft, only: tddft_polar_hybrid
+               call tddft_polar_hybrid(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, 0.0d0, alpha, niter_p)
+            end block
+         else
+            call cphf_solve_efield(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, alpha, niter_p)
+         endif
          aiso = (alpha(1,1) + alpha(2,2) + alpha(3,3))/3.0d0
          aani = sqrt(0.5d0*((alpha(1,1)-alpha(2,2))**2 + (alpha(2,2)-alpha(3,3))**2 + (alpha(3,3)-alpha(1,1))**2 &
                     + 6.0d0*(alpha(1,2)**2 + alpha(1,3)**2 + alpha(2,3)**2)))
@@ -1423,7 +1637,51 @@ block
          enddo
          print '(A,F12.4,A,F12.4,A)', 'Isotropic   (xx+yy+zz)/3 = ', aiso, ' a.u. = ', aiso*AU2ANG3, ' A^3'
          print '(A,F12.4,A,F12.4,A)', 'Anisotropy               = ', aani, ' a.u. = ', aani*AU2ANG3, ' A^3'
+         if (cosmo_enabled) print '(A)', 'Solvent: equilibrium (static eps) for the static tensor'
          print '(A,I0)', 'Coupled-perturbed iterations: ', niter_p
+         print '(A,F10.1)', 'Wall time (s): ', omp_get_wtime() - tp0
+         call report_energy_only(E)
+         call report_polar(alpha, aiso, aani, niter_p)
+         if (cosmo_enabled) then
+            if (cosmo_cpcm) then
+               f_eps = (opts%tddft_eps_opt-1.0d0)/opts%tddft_eps_opt
+            else
+               f_eps = (opts%tddft_eps_opt-1.0d0)/(opts%tddft_eps_opt+0.5d0)
+            endif
+         endif
+         nom = 0
+         if (len_trim(opts%polar_omega) > 0) call parse_polar_omega(trim(opts%polar_omega), om, nom, omok)
+         do iom = 1, nom
+            tp0 = omp_get_wtime()
+            if (HF_exchange_frac /= 0.0d0 .or. RS_omega > 0.0d0) then
+               block
+                  use mod_tddft, only: tddft_polar_hybrid
+                  call tddft_polar_hybrid(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, om(iom), ad, niter_p)
+               end block
+            else
+               call cphf_solve_efield(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, ad, niter_p, om(iom))
+            endif
+            adiso = (ad(1,1) + ad(2,2) + ad(3,3))/3.0d0
+            adani = sqrt(0.5d0*((ad(1,1)-ad(2,2))**2 + (ad(2,2)-ad(3,3))**2 + (ad(3,3)-ad(1,1))**2 &
+                       + 6.0d0*(ad(1,2)**2 + ad(1,3)**2 + ad(2,3)**2)))
+            print '(A)', ''
+            print '(A,F10.6,A,F9.4,A,F10.2,A)', 'Dynamic dipole polarizability (a.u.) at omega = ', om(iom), ' a.u. = ', &
+                  om(iom)*27.211386245988d0, ' eV = ', merge(45.56335252760d0/om(iom), 0.0d0, om(iom) > 0.0d0), ' nm'
+            print '(A,3A14)', '       ', ('             '//ax(jp), jp = 1,3)
+            do ip = 1,3
+               print '(A,A,3F14.4)', '    ', ax(ip), (ad(ip,jp), jp = 1,3)
+            enddo
+            print '(A,F12.4,A,F12.4,A)', 'Isotropic   (xx+yy+zz)/3 = ', adiso, ' a.u. = ', adiso*AU2ANG3, ' A^3'
+            print '(A,F12.4,A,F12.4,A)', 'Anisotropy               = ', adani, ' a.u. = ', adani*AU2ANG3, ' A^3'
+            print '(A,I0)', 'Coupled-perturbed iterations: ', niter_p
+            print '(A,F10.1)', 'Wall time (s): ', omp_get_wtime() - tp0
+            call report_polar_dynamic(om(iom), ad, adiso, adani, niter_p)
+         enddo
+         if (cosmo_enabled) then
+            if (nom > 0) print '(A,F7.3)', 'Solvent: dynamic tensors with the optical eps ', opts%tddft_eps_opt
+            f_eps = f_eps_static_p
+            cosmo_hess_active = .false.
+         endif
          if (xc_uses_vv10()) then
             print '(A)', 'Note: the VV10 nonlocal kernel is not in the response '// &
                          '(0.04% of alpha for water, not quantified elsewhere)'
@@ -1432,13 +1690,210 @@ block
          call flush(6)
       end block
    endif
+   if (opts%tddft_nroots > 0 .and. iconv == 1) then
+      block
+         use mod_cosmo_state, only: cosmo_enabled, f_eps, cosmo_cpcm
+         use mod_cosmo_hessian, only: cosmo_hess_active
+         use mod_tddft, only: tddft_rks, tddft_main_transitions
+         use mod_tddft_density, only: tddft_hole_electron, tddft_hole_electron_uks, tddft_he_wanted
+         use mod_tddft_nto, only: tddft_nto_rks, tddft_nto_uks
+         use mod_engine_report, only: report_tddft_state, report_energy_only, RPT_TD_SINGLET, RPT_TD_TRIPLET, RPT_TD_UKS
+         use mod_cpscf, only: cpscf_triplet
+         use mod_tddft, only: tddft_uks, tddft_tda, tddft_note
+         real(8) :: f_eps_static
+         logical :: tdp
+         real(8), parameter :: HARTREE_EV = 27.211386245988d0, HARTREE_NM = 45.56335252760d0
+         real(8), allocatable :: wex(:), fosc(:), tdm(:,:), xpy(:,:,:), xmy(:,:,:), ctm(:,:), ctv(:)
+         integer :: nr, nv, napp, ir, ii, nlist, ispin, nspin
+         integer, allocatable :: tfrom(:), tto(:)
+         real(8), allocatable :: twt(:)
+         real(8) :: tdconv
+         tdconv = 1.0d-4
+         f_eps_static = f_eps
+         if (cosmo_enabled) then
+            if (cosmo_cpcm) then
+               f_eps = (opts%tddft_eps_opt-1.0d0)/opts%tddft_eps_opt
+            else
+               f_eps = (opts%tddft_eps_opt-1.0d0)/(opts%tddft_eps_opt+0.5d0)
+            endif
+            cosmo_hess_active = .true.
+         endif
+         tddft_tda = opts%tddft_tda
+         tdp = opts%tddft_print
+         if (Multi /= 1) then
+            block
+               real(8), allocatable :: uw(:), uf(:), ut(:,:), upy(:,:), umy(:,:), uct(:,:), uctv(:)
+               integer :: nva, nvb, nau, ntu, s, nj
+               character(len=1) :: sl
+               integer, allocatable :: jf(:), jt(:)
+               real(8), allocatable :: jw(:)
+               character(len=1), allocatable :: js(:)
+               if (tdp .and. (opts%tddft_triplets)) &
+                  print '(A)', 'Note: tddft_triplets applies to closed-shell references only; '// &
+                  'the states of an open-shell reference are all in the one list'
+               nva = Nconts - n_alpha ; nvb = Nconts - n_beta
+               nau = nva*n_alpha ; ntu = nau + nvb*n_beta
+               nr = min(opts%tddft_nroots, ntu)
+               allocate(uw(nr), uf(nr), ut(3,nr), upy(ntu,nr), umy(ntu,nr))
+               allocate(tfrom(ntu), tto(ntu), twt(ntu))
+               call report_energy_only(E)
+               call tddft_uks(Nconts, n_alpha, n_beta, C_a, eLev_a, C_b, eLev_b, Pa, Pb, HF_exchange_frac, nr, &
+                              uw, uf, ut, upy, umy, napp, tdconv, opts%tddft_robust)
+               if (tddft_he_wanted(opts%tddft_cube)) then
+                  allocate(uct(5,nr))
+                  call tddft_hole_electron_uks(Nconts, n_alpha, n_beta, C_a, C_b, nr, upy, umy, trim(opts%tddft_cube), &
+                                               trim(opts%freq_base), uct)
+               endif
+               if (tdp) print '(A)', '[TDDFT]'
+               if (tdp) print '(A)', 'Excited states (UKS linear response, adiabatic kernel)'
+               if (tdp) print '(A)', 'Method: '//trim(tddft_note)
+               if (tdp .and. (cosmo_enabled)) print '(A,F7.3)', 'Solvent: non-equilibrium, optical eps ', opts%tddft_eps_opt
+               if (tdp) print '(A)', ''
+               if (tdp) print '(A)', 'state      E (eV)    E (Ha)       nm        f        mu_x      mu_y      mu_z'
+               do ir = 1,nr
+                  if (tdp) print '(I5,F12.4,F10.4,F10.2,F9.4,3F10.4)', ir, uw(ir)*HARTREE_EV, uw(ir), HARTREE_NM/uw(ir), &
+                        uf(ir), ut(:,ir)
+               enddo
+               if (tdp) print '(A)', ''
+               if (tdp) &
+                  print '(A,A,I0,A,I0,A)', 'Main transitions, weight X^2 - Y^2 >= 0.05 (orbitals numbered from 1 per spin, ', &
+                     'HOMO = ', n_alpha, 'a / ', n_beta, 'b)'
+               allocate(jf(2*ntu), jt(2*ntu), jw(2*ntu), js(2*ntu))
+               do ir = 1,nr
+                  if (tdp) print '(A,I0,A,F9.4,A)', 'state ', ir, '  (', uw(ir)*HARTREE_EV, ' eV)'
+                  nj = 0
+                  do s = 1,2
+                     if (s == 1) then
+                        call tddft_main_transitions(nva, n_alpha, upy(1:nau,ir), umy(1:nau,ir), 0.05d0, &
+                                                    nlist, tfrom, tto, twt)
+                        sl = 'a'
+                     else
+                        if (n_beta == 0) cycle
+                        call tddft_main_transitions(nvb, n_beta, upy(nau+1:ntu,ir), umy(nau+1:ntu,ir), 0.05d0, &
+                                                    nlist, tfrom, tto, twt)
+                        sl = 'b'
+                     endif
+                     do ii = 1,nlist
+                        if (tdp) print '(A,I6,A,A,I6,A,F10.4)', '  ', tfrom(ii), sl, ' ->', tto(ii), sl, twt(ii)
+                        nj = nj + 1
+                        jf(nj) = tfrom(ii) ; jt(nj) = tto(ii) ; jw(nj) = twt(ii) ; js(nj) = sl
+                     enddo
+                  enddo
+                  if (allocated(uct)) then
+                     uctv = uct(:,ir)
+                  else if (allocated(uctv)) then
+                     deallocate(uctv)
+                  endif
+                     call report_tddft_state(RPT_TD_UKS, ir, uw(ir), uf(ir), ut(:,ir), nj, jf, jt, jw, napp, &
+                                             trim(tddft_note), spins=js, ct=uctv)
+               enddo
+               deallocate(jf, jt, jw, js)
+               if (allocated(uct)) then
+                  if (tdp) print '(A)', ''
+                  if (tdp) print '(A)', 'Hole and electron (unrelaxed densities of the response vectors, both spins, on a grid)'
+                  if (tdp) print '(A)', 'state   D_CT (A)   q_CT (e)  sigma_h (A)  sigma_e (A)   Lambda'
+                  do ir = 1,nr
+                     if (tdp) print '(I5,F11.3,F11.3,F13.3,F13.3,F9.3)', ir, uct(:,ir)
+                  enddo
+               endif
+               if (tdp) print '(A,I0)', 'Response vectors applied (Davidson): ', napp
+               if (xc_uses_vv10()) then
+                  if (tdp) print '(A)', 'Note: the VV10 nonlocal kernel is not in the response (the ground state includes VV10)'
+               endif
+               if (tdp) print '(A)', '[TDDFTEND]'
+               call flush(6)
+               if (index(opts%tddft_cube, 'nto') > 0) &
+                  call tddft_nto_uks(Nconts, n_alpha, n_beta, C_a, C_b, nr, upy, trim(opts%tddft_cube), trim(opts%freq_base))
+               deallocate(uw, uf, ut, upy, umy, tfrom, tto, twt)
+               if (allocated(uct)) deallocate(uct)
+               if (allocated(uctv)) deallocate(uctv)
+            end block
+         else
+         nr = opts%tddft_nroots
+         nv = Nconts - n_alpha
+         if (nr > nv*n_alpha) nr = nv*n_alpha
+         allocate(wex(nr), fosc(nr), tdm(3,nr), xpy(nv,n_alpha,nr), xmy(nv,n_alpha,nr))
+         allocate(tfrom(nv*n_alpha), tto(nv*n_alpha), twt(nv*n_alpha))
+         call report_energy_only(E)
+         nspin = merge(2, 1, opts%tddft_triplets)
+         do ispin = 1,nspin
+            cpscf_triplet = (ispin == 2)
+            call tddft_rks(Nconts, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, nr, wex, fosc, tdm, &
+                           xpy, xmy, napp, tdconv, opts%tddft_robust)
+            cpscf_triplet = .false.
+            if (ispin == 2) then
+               fosc = 0.0d0 ; tdm = 0.0d0
+            else
+               if (allocated(ctm)) deallocate(ctm)
+               if (tddft_he_wanted(opts%tddft_cube)) then
+                  allocate(ctm(5,nr))
+                  call tddft_hole_electron(Nconts, n_alpha, C_a, nr, xpy, xmy, trim(opts%tddft_cube), trim(opts%freq_base), ctm)
+               endif
+            endif
+            if (tdp) print '(A)', '[TDDFT]'
+            if (ispin == 1) then
+               if (tdp) print '(A)', 'Singlet excited states (RKS linear response, adiabatic kernel)'
+            else
+               if (tdp) print '(A)', 'Triplet excited states (RKS linear response, adiabatic kernel)'
+            endif
+            if (tdp) print '(A)', 'Method: '//trim(tddft_note)
+            if (tdp .and. (cosmo_enabled)) print '(A,F7.3)', 'Solvent: non-equilibrium, optical eps ', opts%tddft_eps_opt
+            if (tdp) print '(A)', ''
+            if (tdp) print '(A)', 'state      E (eV)    E (Ha)       nm        f        mu_x      mu_y      mu_z'
+            do ir = 1,nr
+               if (tdp) print '(I5,F12.4,F10.4,F10.2,F9.4,3F10.4)', ir, wex(ir)*HARTREE_EV, wex(ir), HARTREE_NM/wex(ir), &
+                     fosc(ir), tdm(:,ir)
+            enddo
+            if (tdp) print '(A)', ''
+            if (tdp) print '(A,I0,A)', 'Main transitions, weight X^2 - Y^2 >= 0.05 (orbitals numbered from 1, HOMO = ', n_alpha, ')'
+            do ir = 1,nr
+               call tddft_main_transitions(nv, n_alpha, xpy(:,:,ir), xmy(:,:,ir), 0.05d0, nlist, tfrom, tto, twt)
+               if (tdp) print '(A,I0,A,F9.4,A)', 'state ', ir, '  (', wex(ir)*HARTREE_EV, ' eV)'
+               do ii = 1,nlist
+                  if (tdp) print '(A,I6,A,I6,F10.4)', '  ', tfrom(ii), ' ->', tto(ii), twt(ii)
+               enddo
+               if (ispin == 1 .and. allocated(ctm)) then
+                  ctv = ctm(:,ir)
+               else if (allocated(ctv)) then
+                  deallocate(ctv)
+               endif
+                  call report_tddft_state(merge(RPT_TD_TRIPLET, RPT_TD_SINGLET, ispin == 2), ir, wex(ir), fosc(ir), tdm(:,ir), &
+                                          nlist, tfrom, tto, twt, napp, trim(tddft_note), ct=ctv)
+            enddo
+            if (ispin == 1 .and. allocated(ctm)) then
+               if (tdp) print '(A)', ''
+               if (tdp) print '(A)', 'Hole and electron (unrelaxed densities of the response vectors, on a grid)'
+               if (tdp) print '(A)', 'state   D_CT (A)   q_CT (e)  sigma_h (A)  sigma_e (A)   Lambda'
+               do ir = 1,nr
+                  if (tdp) print '(I5,F11.3,F11.3,F13.3,F13.3,F9.3)', ir, ctm(:,ir)
+               enddo
+            endif
+            if (tdp) print '(A,I0)', 'Response vectors applied (Davidson): ', napp
+            if (xc_uses_vv10()) then
+               if (tdp) print '(A)', 'Note: the VV10 nonlocal kernel is not in the response (the ground state includes VV10)'
+            endif
+            if (tdp) print '(A)', '[TDDFTEND]'
+            call flush(6)
+            if (ispin == 1 .and. index(opts%tddft_cube, 'nto') > 0) &
+               call tddft_nto_rks(Nconts, n_alpha, C_a, nr, xpy, trim(opts%tddft_cube), trim(opts%freq_base))
+         enddo
+         deallocate(wex, fosc, tdm, xpy, xmy, tfrom, tto, twt)
+         if (allocated(ctm)) deallocate(ctm)
+         if (allocated(ctv)) deallocate(ctv)
+         endif
+         f_eps = f_eps_static
+         cosmo_hess_active = .false.
+      end block
+   endif
    call get_environment_variable("ENGINE_HESSIAN_TOTAL_DEBUG", envval, status=envstat)
-   if ((envstat == 0 .or. freq_request) .and. iconv == 1) then
+   if ((envstat == 0 .or. opts%freq) .and. iconv == 1) then
       iatom = 1; ic = 1
       if (envstat == 0) read(envval,*) iatom, ic
       block
          use mod_hessian_freq, only: freq_unit, freq_energy
+         use mod_engine_report, only: report_energy_only
          freq_energy = E
+         call report_energy_only(E)
          write(freq_unit,'(A,F20.10)') ' FINAL SINGLE POINT ENERGY (Eh): ', E
       end block
       if (engine_use_df_k .and. (HF_exchange_frac > 1.0d-12 .or. RS_omega > 0.0d0)) then
@@ -1499,24 +1954,34 @@ block
          endif
       end block
       Pa = matmul(C_a(:,1:n_alpha), transpose(C_a(:,1:n_alpha)))
-      if (n_alpha /= n_beta) then
+      if (n_alpha /= n_beta .or. Multi /= 1) then
          Pb = matmul(C_b(:,1:n_beta), transpose(C_b(:,1:n_beta)))
       else
          Pb = Pa
       endif
       call get_environment_variable("ENGINE_HESSIAN_FORCE_UHF", envval, status=envstat)
-      if (n_alpha /= n_beta) then
+      if (n_alpha /= n_beta .or. Multi /= 1) then
          call cphf_debug_hessian_row_uhf(Nconts, Natoms, n_alpha, n_beta, C_a, eLev_a, C_b, eLev_b, &
-                                         Pa, Pb, HF_exchange_frac, iatom, ic)
+                                         Pa, Pb, HF_exchange_frac, iatom, ic &
+                                         )
       else if (envstat == 0 .and. trim(envval) == "1") then
          call cphf_debug_hessian_row_uhf(Nconts, Natoms, n_alpha, n_alpha, C_a, eLev_a, C_a, eLev_a, &
-                                         Pa, Pb, HF_exchange_frac, iatom, ic)
+                                         Pa, Pb, HF_exchange_frac, iatom, ic &
+                                         )
       else
-         call cphf_debug_hessian_row(Nconts, Natoms, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, iatom, ic)
+         call cphf_debug_hessian_row(Nconts, Natoms, n_alpha, C_a, eLev_a, Pa, Pb, HF_exchange_frac, iatom, ic &
+                                     )
       endif
-      if (.not. hessian_return) then
-         call finalize_output_file()
-         stop
+      if (.not. opts%hessian_return) then
+         opts%done = .true.
+         energy_out = E
+         force_out = 0.0d0 ; MLcharge_out = 0.0d0
+         mem_grid_gb = 0.0d0 ; mem_2e_gb = 0.0d0
+         if (.not. allocated(dens_out_a)) allocate(dens_out_a(nConts,nConts))
+         if (.not. allocated(dens_out_b)) allocate(dens_out_b(nConts,nConts))
+         dens_out_a = Pa ; dens_out_b = Pb
+         opts%rep = rpt
+         return
       endif
    endif
    call get_environment_variable("ENGINE_DF_RAW", envval, status=envstat)
@@ -1606,7 +2071,48 @@ if (iconv .eq. 1 .and. .not. engine_quiet) then
       call calc_properties(Natoms, MLcharge_out)
    endif
 endif
-if (iconv .eq. 1 .and. mayer_request) call calc_mayer_bond_orders(Natoms)
+if (iconv .eq. 1 .and. opts%esp_charges) then
+   if (allocated(opts%esp_q)) deallocate(opts%esp_q)
+   allocate(opts%esp_q(Natoms))
+   call resp_charges(Natoms, opts%esp_q)
+endif
+if (iconv .eq. 1 .and. opts%pc_grad_request .and. nPointCharges > 0) then
+   block
+   real(8), parameter :: hpc = 2.0d-3
+   real(8), allocatable :: pts(:,:), Vp(:), Ptot_pc(:,:)
+   real(8) :: rp(3), dist_pc
+   integer :: ic_pc, k_pc, ia_pc
+   allocate(pts(3,6*nPointCharges), Vp(6*nPointCharges), Ptot_pc(nConts,nConts))
+   Ptot_pc = Pa + Pb
+   do ic_pc = 1, nPointCharges
+      rp = pointcharge_coor(:,ic_pc) * ans2bohr
+      do k_pc = 1, 3
+         pts(:,6*(ic_pc-1)+2*k_pc-1) = rp ; pts(k_pc,6*(ic_pc-1)+2*k_pc-1) = rp(k_pc) + hpc
+         pts(:,6*(ic_pc-1)+2*k_pc)   = rp ; pts(k_pc,6*(ic_pc-1)+2*k_pc)   = rp(k_pc) - hpc
+      enddo
+   enddo
+   call esp_at_grid_batch(6*nPointCharges, pts, Ptot_pc, Vp)
+   do ic_pc = 1, 6*nPointCharges
+      do ia_pc = 1, Natoms
+         dist_pc = sqrt(sum((pts(:,ic_pc) - atoms(ia_pc)%coor*ans2bohr)**2))
+         Vp(ic_pc) = Vp(ic_pc) + real(atoms(ia_pc)%charge - atoms(ia_pc)%ecpCoreElec,8)/dist_pc
+      enddo
+   enddo
+   if (allocated(opts%pc_grad)) deallocate(opts%pc_grad)
+   allocate(opts%pc_grad(nPointCharges,3))
+   do ic_pc = 1, nPointCharges
+      do k_pc = 1, 3
+         opts%pc_grad(ic_pc,k_pc) = pointcharge_q(ic_pc) * (Vp(6*(ic_pc-1)+2*k_pc-1) - Vp(6*(ic_pc-1)+2*k_pc)) / (2.0d0*hpc)
+      enddo
+   enddo
+   end block
+endif
+if (iconv .eq. 1 .and. opts%mayer) then
+   call calc_mayer_bond_orders(Natoms)
+   if (allocated(opts%mayer_bo)) deallocate(opts%mayer_bo)
+   allocate(opts%mayer_bo(Natoms,Natoms))
+   opts%mayer_bo = mayer_bo
+endif
 if (iconv .eq. 1 .and. cosmo_enabled) call cosmo_report_sigma_profile(cosmo_sigma_rav, cosmo_sigma_profile_file)
 if (iconv .eq. 1 .and. cosmo_enabled) then
    block
@@ -1729,6 +2235,7 @@ do i = 1,Natoms
    force_out(i,:) = atoms(i)%atmForce
 enddo
 if (iconv .ne. 1) MLcharge_out = 0.0d0
+opts%rep = rpt
 
 end subroutine EngineUp
 
@@ -1859,6 +2366,8 @@ case ('6-311G*','6-311G(D)');        resolve_basis_name = '6311gs'
 case ('6-311G**','6-311G(D,P)');     resolve_basis_name = '6311gdp'
 case ('6-311+G**','6-311+G(D,P)');   resolve_basis_name = '6311pgss'
 case ('6-311++G**','6-311++G(D,P)'); resolve_basis_name = '6311ppgss'
+case ('6-311+G(2D,P)');              resolve_basis_name = '6311pg2dp'
+case ('6-311++G(2D,P)');             resolve_basis_name = '6311ppg2dp'
 case ('CC-PVDZ');                    resolve_basis_name = 'ccpvdz'
 case ('CC-PVTZ');                    resolve_basis_name = 'ccpvtz'
 case ('CC-PVQZ');                    resolve_basis_name = 'ccpvqz'
@@ -1926,19 +2435,29 @@ end function aux_basis_covers_all_atoms
 
 subroutine engine_startup_mark(label)
 use omp_lib, only: omp_get_wtime
+use MOL_info, only: engine_verbose
 implicit none
 character(len=*),intent(in) :: label
 real(8),save :: t0 = -1.0d0, tl = 0.0d0
 character(len=8) :: e
 real(8) :: t
-call get_environment_variable("ENGINE_STARTUP_TIME", e)
-if (trim(e) .ne. "1") return
 t = omp_get_wtime()
 if (t0 .lt. 0.0d0) then
    t0 = t ; tl = t
 endif
-print '(A,A30,2F9.3)', " STARTUP ", label, t - t0, t - tl
-call flush(6)
+if (engine_verbose .ge. 2) then
+   block
+      use mod_meminfo, only: get_process_memory_bytes
+      integer(8) :: rss, hwm
+      call get_process_memory_bytes(rss, hwm)
+      print '(A,A30,2F9.3,A,F7.2,A,F7.2,A)', " STARTUP ", label, t - t0, t - tl, "   RSS ", real(rss,8)/1024.0d0**3, &
+            " GB, peak ", real(hwm,8)/1024.0d0**3, " GB"
+   end block
+   call flush(6)
+else if (t - tl .gt. 60.0d0) then
+   print '(A,A,F8.1,A)', " [startup] step '", trim(label), t - tl, " s'"
+   call flush(6)
+endif
 tl = t
 end subroutine engine_startup_mark
 

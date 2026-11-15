@@ -10,7 +10,7 @@
 &end
 
 &opt
- opt_ts = .true.            ! P-RFO; analytic Hessian at the first step (default for a TS search)
+ ts = .true.            ! P-RFO; analytic Hessian at the first step (default for a TS search)
 &end
 
 &atoms

@@ -15,6 +15,5 @@ H    0.0000   -0.7700   -0.4800
 &end
 
 &opt
- opt_freeze = '1'
- opt_constraints = 'bond 1 2 1.05'
+ constraints = 'atoms 1; bond 1 2 1.05'
 &end

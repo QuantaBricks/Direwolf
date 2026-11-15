@@ -15,6 +15,6 @@ H    0.0000   -0.7700   -0.4800
 &end
 
 &opt
- opt_hess = 'calc'          ! analytic Hessian at every cycle (Gaussian calcall)
- opt_hess_every = 1
+ hessian = 'calc'          ! analytic Hessian at every cycle (Gaussian calcall)
+ recomp_hess = 1
 &end

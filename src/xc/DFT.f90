@@ -23,6 +23,7 @@ INCLUDE 'parameter.h'
     integer    :: igrid,ip,nb,batch_start
     integer    :: ii,jj,n_sig,n_sig_wide,dd
     logical    :: mgga_active
+    logical    :: xc_done_ext
     logical    :: vv10_active
     real(8)    :: Fxc_a_s_val,Fxc_b_s_val
     integer,allocatable :: sig_idx(:),narrow_idx(:)
@@ -57,6 +58,7 @@ INCLUDE 'parameter.h'
     real(8),allocatable :: catPab(:,:),catWab(:,:)
     real(8),allocatable :: Fxc_a_local(:,:),Fxc_b_local(:,:)
     real(8) :: Exc_local
+    integer :: ir_, ic_, mj
     real(8) :: rho_int_local
 
     Fxc_a = 0
@@ -109,7 +111,7 @@ INCLUDE 'parameter.h'
     !$omp&   private(catPab,catWab,ex_b,ec_b,sigma_aa_b,sigma_ab_b,sigma_bb_b,sigma_t_b) &
     !$omp&   private(vrhoa_b,vrhob_b,vsigmaaa_b,vsigmabb_b,vsigmaab_b) &
     !$omp&   private(tau_a_b,tau_b_b,vtaua_b,vtaub_b,Val1d_tmp,Wa1_tmp,ValTauW) &
-    !$omp&   private(Fxc_a_local,Fxc_b_local,Exc_local,rho_int_local)
+    !$omp&   private(Fxc_a_local,Fxc_b_local,Exc_local,rho_int_local,ir_,ic_,mj)
     allocate(WeightBatch(BATCH))
     allocate(Wa(nconts,BATCH))
     allocate(rho_a_b(BATCH),drv_a_b(BATCH,3))
@@ -143,9 +145,20 @@ INCLUDE 'parameter.h'
     allocate(ValBatch_wide(wide_ld,BATCH),Val1Batch_wide(wide_ld,3,BATCH))
     allocate(maxval_bf(wide_ld))
     allocate(sig_idx(nconts),narrow_idx(wide_ld),wide_idx(wide_ld))
-    allocate(Fxc_a_local(nconts,nconts),Fxc_b_local(nconts,nconts))
-    Fxc_a_local = 0
-    Fxc_b_local = 0
+    allocate(Fxc_a_local(nconts,nconts))
+    if (Multi .ne. 1) then
+       allocate(Fxc_b_local(nconts,nconts))
+    else
+       allocate(Fxc_b_local(1,1))
+    endif
+    do mj = 1,size(Fxc_a_local,2)
+       Fxc_a_local(1:min(mj,size(Fxc_a_local,1)),mj) = 0
+    enddo
+    if (Multi .ne. 1) then
+       do mj = 1,nconts
+          Fxc_b_local(1:mj,mj) = 0
+       enddo
+    endif
     Exc_local = 0
     rho_int_local = 0
 
@@ -347,8 +360,8 @@ INCLUDE 'parameter.h'
           do jj = 1,n_sig
              do ii = 1,jj
                 Fxc_a_s_val = Fxc_a_s(ii,jj) + Fxc_a_s(jj,ii)
-                Fxc_a_local(sig_idx(ii),sig_idx(jj)) = Fxc_a_local(sig_idx(ii),sig_idx(jj)) + Fxc_a_s_val
-                if (ii .ne. jj) Fxc_a_local(sig_idx(jj),sig_idx(ii)) = Fxc_a_local(sig_idx(jj),sig_idx(ii)) + Fxc_a_s_val
+                ir_ = min(sig_idx(ii),sig_idx(jj)); ic_ = max(sig_idx(ii),sig_idx(jj))
+                Fxc_a_local(ir_,ic_) = Fxc_a_local(ir_,ic_) + Fxc_a_s_val
              enddo
           enddo
        else
@@ -377,12 +390,9 @@ INCLUDE 'parameter.h'
              do ii = 1,jj
                 Fxc_a_s_val = Fxc_a_s(ii,jj) + Fxc_a_s(jj,ii)
                 Fxc_b_s_val = Fxc_b_s(ii,jj) + Fxc_b_s(jj,ii)
-                Fxc_a_local(sig_idx(ii),sig_idx(jj)) = Fxc_a_local(sig_idx(ii),sig_idx(jj)) + Fxc_a_s_val
-                Fxc_b_local(sig_idx(ii),sig_idx(jj)) = Fxc_b_local(sig_idx(ii),sig_idx(jj)) + Fxc_b_s_val
-                if (ii .ne. jj) then
-                   Fxc_a_local(sig_idx(jj),sig_idx(ii)) = Fxc_a_local(sig_idx(jj),sig_idx(ii)) + Fxc_a_s_val
-                   Fxc_b_local(sig_idx(jj),sig_idx(ii)) = Fxc_b_local(sig_idx(jj),sig_idx(ii)) + Fxc_b_s_val
-                endif
+                ir_ = min(sig_idx(ii),sig_idx(jj)); ic_ = max(sig_idx(ii),sig_idx(jj))
+                Fxc_a_local(ir_,ic_) = Fxc_a_local(ir_,ic_) + Fxc_a_s_val
+                Fxc_b_local(ir_,ic_) = Fxc_b_local(ir_,ic_) + Fxc_b_s_val
              enddo
           enddo
        endif
@@ -418,13 +428,26 @@ INCLUDE 'parameter.h'
          if (omp_get_thread_num() .eq. merge_tid) then
             Exc = Exc + Exc_local
             xcgrid_int_rho = xcgrid_int_rho + rho_int_local
-            Fxc_a = Fxc_a + Fxc_a_local
-            Fxc_b = Fxc_b + Fxc_b_local
+            do mj = 1,nconts
+               Fxc_a(1:mj,mj) = Fxc_a(1:mj,mj) + Fxc_a_local(1:mj,mj)
+            enddo
+            if (Multi .ne. 1) then
+               do mj = 1,nconts
+                  Fxc_b(1:mj,mj) = Fxc_b(1:mj,mj) + Fxc_b_local(1:mj,mj)
+               enddo
+            endif
          endif
       enddo
     end block
     deallocate(Fxc_a_local,Fxc_b_local)
     !$omp end parallel
+
+    !$omp parallel do private(mj) schedule(static)
+    do mj = 1,nconts
+       Fxc_a(mj+1:nconts,mj) = Fxc_a(mj,mj+1:nconts)
+       if (Multi .ne. 1) Fxc_b(mj+1:nconts,mj) = Fxc_b(mj,mj+1:nconts)
+    enddo
+    !$omp end parallel do
 
     if (Multi .eq. 1) Fxc_b = Fxc_a
 end subroutine

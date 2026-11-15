@@ -14,12 +14,13 @@ INCLUDE 'parameter.h'
 private
 public :: xc_hess_direct
 public :: xc_fxc_apply
-public :: xc_fxc_project_vo
+public :: xc_fxc_project_vo, xc_fxc_project_vo_t
 public :: xc_fxc_project, xc_fxc_c, xc_fxc_set_loc, xc_fxc_clear_loc
 public :: xc_vxc_deriv_atom, xc_vxc_deriv_occ
 public :: xc_hess_direct_u, xc_vxc_deriv_occ_u, xc_fxc_apply_u, xc_fxc_c_u
-public :: xc_resp_grid_build, xc_resp_grid_clear
+public :: xc_resp_grid_build, xc_resp_grid_build_td, xc_resp_grid_clear
 public :: eval_bf_derivs
+public :: xc_resp_td_light
 
 integer,parameter :: MAX_TERM = 6
 integer,parameter :: MAX_LPOW = 7
@@ -29,8 +30,10 @@ integer,allocatable,save :: bf_ta(:,:),bf_tb(:,:),bf_tc(:,:)
 integer,allocatable,save :: bf_start(:),bf_len(:)
 real(8),allocatable,save :: bf_coef(:,:)
 logical,save :: tables_built = .false.
+logical,save :: td_light_req = .false., td_triplet_req = .false.
 integer,save :: nrg = 0
 real(8),save,public :: fxu_t(3) = 0.0d0
+integer,save,public :: xc_fxc_ngc = 128
 logical,save :: loc_ready = .false.
 integer,save :: loc_n = 0, loc_nocc = 0
 real(8),allocatable,save :: loc_Co(:,:), loc_Cl(:,:), loc_Q(:,:)
@@ -1305,6 +1308,7 @@ logical :: mg
 character(len=16) :: envs
 integer(omp_lock_kind),allocatable :: alk(:)
 integer(16),allocatable :: VCq(:,:,:,:)
+real(8),allocatable :: vxd_chk(:,:,:,:)
 
 mg = xc_uses_tau()
 vthr = 1.0d-7
@@ -1948,6 +1952,31 @@ enddo
 deallocate(Ut, glk)
 end subroutine xc_fxc_project_vo_grp
 
+subroutine xc_fxc_project_vo_t(nConts, nocc, nvir, nbatch, C_a, U, Ptot, Xproj)
+implicit none
+integer,intent(in) :: nConts, nocc, nvir, nbatch
+real(8),intent(in) :: C_a(nConts,nConts)
+real(8),intent(in) :: U(nvir,nocc,nbatch)
+real(8),intent(in) :: Ptot(nConts,nConts)
+real(8),intent(out) :: Xproj(nvir,nocc,nbatch)
+external :: dgemm
+real(8),allocatable :: La(:,:,:), Lb(:,:,:), Xa(:,:,:), Xb(:,:,:), Ph(:,:), Co(:,:)
+integer :: b
+allocate(La(nConts,nocc,nbatch), Lb(nConts,nocc,nbatch), Xa(nConts,nocc,nbatch), Xb(nConts,nocc,nbatch))
+allocate(Ph(nConts,nConts), Co(nConts,nocc))
+Co = C_a(:,1:nocc)
+Ph = 0.5d0*Ptot
+do b = 1,nbatch
+   call dgemm('N','N',nConts,nocc,nvir,1.0d0,C_a(1,nocc+1),nConts,U(1,1,b),nvir,0.0d0,La(1,1,b),nConts)
+   Lb(:,:,b) = -La(:,:,b)
+enddo
+call xc_fxc_c_u(nConts, nocc, nocc, Co, Co, nbatch, La, Lb, Ph, Ph, Xa, Xb)
+do b = 1,nbatch
+   call dgemm('T','N',nvir,nocc,nConts,1.0d0,C_a(1,nocc+1),nConts,Xa(1,1,b),nConts,0.0d0,Xproj(1,1,b),nvir)
+enddo
+deallocate(La, Lb, Xa, Xb, Ph, Co)
+end subroutine xc_fxc_project_vo_t
+
 subroutine xc_fxc_project_vo(nConts, nocc, nvir, nbatch, C_a, U, Ptot, Xproj)
 implicit none
 integer,intent(in) :: nConts, nocc, nvir, nbatch
@@ -2005,13 +2034,17 @@ integer,allocatable :: gidx(:), gidx2(:), sl(:), gst(:)
 real(8),allocatable :: cc(:,:), wg(:), X0r(:), X1r(:), X0(:), X1(:), A0(:), Pl(:), Col(:), Po(:), dPo(:)
 real(8),allocatable :: kv(:,:), gm(:,:), Ul(:), Z(:), Yt(:), cfi(:), H(:), XL(:), sc(:), A1(:), dZ(:)
 integer(omp_lock_kind),allocatable :: glk(:)
-integer(16),allocatable :: Xq(:,:,:)
+integer(16),allocatable :: Xq(:,:,:), XLq(:)
+integer :: NST, wst, ist, npend, nacq
+integer,allocatable :: slo(:), shi(:), pend(:)
 real(8) :: vthr, othr
 real(8),allocatable :: Cu(:,:), Lu(:,:,:), Tq(:,:), dPoc(:)
 integer,allocatable :: olist(:)
 integer :: no2, bb
 logical :: use_loc, mg
 character(len=16) :: envs
+real(8) :: tq0, tq_inv, tq_grp, tq_wait, tq_add, tq_tot
+logical :: tq_on
 
 mg = xc_uses_tau()
 
@@ -2027,14 +2060,17 @@ if (nConts .ne. nbf) then
 endif
 npg = ngrids
 if (nrg .gt. 0) npg = nrg
-NGC = 128
+NGC = xc_fxc_ngc
 call get_environment_variable("ENGINE_XC_FXC_NGC", ngce)
 if (len_trim(ngce) .gt. 0) read(ngce,*) NGC
 NBG0 = 8
 call get_environment_variable("ENGINE_XC_FXC_NBG", nbge)
 if (len_trim(nbge) .gt. 0) read(nbge,*) NBG0
 ngrp = (nbatch + NBG0 - 1)/NBG0
-allocate(gst(ngrp+1), glk(ngrp))
+NST = max(1, min(nocc, 16))
+wst = (nocc + NST - 1)/NST
+NST = (nocc + wst - 1)/wst
+allocate(gst(ngrp+1), glk(ngrp*NST))
 do g = 1,ngrp+1
    gst(g) = 1 + ((g-1)*nbatch)/ngrp
 enddo
@@ -2056,20 +2092,23 @@ else
    Cu = Co
    Lu = L
 endif
+tq_on = (engine_verbose .ge. 2)
+tq_inv = 0.0d0 ; tq_grp = 0.0d0 ; tq_wait = 0.0d0 ; tq_add = 0.0d0 ; tq_tot = omp_get_wtime()
 Xt = 0.0d0
 allocate(Xq(nConts,nocc,nbatch))
 Xq = 0_16
-do g = 1,ngrp
+do g = 1,ngrp*NST
    call omp_init_lock(glk(g))
 enddo
-!$omp parallel default(shared) &
-!$omp&   private(olist,no2,dPoc,ic0,ng,k,nsig,nsl,ns2,g,gg,it,nbk,g0,gidx,gidx2,sl,cc,wg,X0r,X1r,X0,X1,A0,Pl,Col,Po,dPo, &
+!$omp parallel default(shared) reduction(+:tq_inv,tq_grp,tq_wait,tq_add) &
+!$omp&   private(tq0,XLq,slo,shi,pend,ist,npend,nacq, &
+!$omp&           olist,no2,dPoc,ic0,ng,k,nsig,nsl,ns2,g,gg,it,nbk,g0,gidx,gidx2,sl,cc,wg,X0r,X1r,X0,X1,A0,Pl,Col,Po,dPo, &
 !$omp&           kv,gm,Ul,Z,Yt,cfi,H,XL,sc,A1,dZ)
 it = omp_get_thread_num()
 allocate(gidx(nbf), gidx2(nbf), sl(nsh), cc(3,NGC), wg(NGC), kv(7,NGC), gm(3,NGC))
 allocate(A1(merge(3*nbf*NGC,1,mg)), dZ(merge(3*NGC*nbmax*nocc,1,mg)))
 allocate(X0r(nbf*NGC), X1r(3*nbf*NGC), X0(nbf*NGC), X1(3*nbf*NGC), A0(nbf*NGC), Pl(nbf*nbf), Col(nbf*nocc))
-allocate(olist(nocc), dPoc(3*NGC*nocc))
+allocate(olist(nocc), dPoc(3*NGC*nocc), XLq(nbf*nbmax*nocc), slo(NST), shi(NST), pend(NST))
 allocate(Po(NGC*nocc), dPo(3*NGC*nocc), Ul(nbf*nbmax*nocc), Z(NGC*nbmax*nocc))
 allocate(Yt(nbf*nbmax*NGC), cfi(NGC*nbmax*nocc), H(nbf*nbmax*NGC), XL(nbf*nbmax*nocc), sc(9*NGC*nbmax))
 !$omp do schedule(dynamic)
@@ -2083,6 +2122,7 @@ do ic0 = 1, npg, NGC
       endif
    enddo
    if (all(wg(1:ng) .eq. 0.0d0)) cycle
+   if (tq_on) tq0 = omp_get_wtime()
    call xc_blk_shells(ng, cc, nsig, gidx, nsl, sl)
    if (nsig .eq. 0) cycle
    call xc_blk_ao(ng, cc, nsig, nsl, sl, X0r, X1r)
@@ -2090,23 +2130,63 @@ do ic0 = 1, npg, NGC
    if (ns2 .eq. 0) cycle
    call pj_inv(ng, ns2, gidx2, wg, kv, gm, X0, X1, A0, A1, Pl, Col, Po, dPo)
    call pj_occ(ng, Po, dPo, othr, no2, olist, dPoc)
+   if (tq_on) tq_inv = tq_inv + (omp_get_wtime() - tq0)
    if (no2 .eq. 0) cycle
    do gg = 0,ngrp-1
       g = mod(gg + it, ngrp) + 1
       g0 = gst(g) ; nbk = gst(g+1) - g0
+      if (tq_on) tq0 = omp_get_wtime()
       call pj_group(ng, ns2, nbk, no2, g0, gidx2, olist, X0, X1, Po, dPoc, kv, gm, Ul, Z, Yt, cfi, H, XL, sc, dZ)
-      call omp_set_lock(glk(g))
-      call pj_add(ns2, nbk, no2, g0, gidx2, olist, XL)
-      call omp_unset_lock(glk(g))
+      if (tq_on) then ; tq_grp = tq_grp + (omp_get_wtime() - tq0) ; tq0 = omp_get_wtime() ; endif
+      XLq(1:ns2*nbk*no2) = to_q(XL(1:ns2*nbk*no2))
+      slo = 1 ; shi = 0
+      do k = 1,no2
+         ist = (olist(k)-1)/wst + 1
+         if (shi(ist) .lt. slo(ist)) slo(ist) = k
+         shi(ist) = k
+      enddo
+      npend = 0
+      do ist = 1,NST
+         if (shi(ist) .ge. slo(ist)) then
+            npend = npend + 1
+            pend(npend) = ist
+         endif
+      enddo
+      if (tq_on) then ; tq_add = tq_add + (omp_get_wtime() - tq0) ; tq0 = omp_get_wtime() ; endif
+      do while (npend .gt. 0)
+         nacq = 0
+         k = 1
+         do while (k .le. npend)
+            ist = pend(k)
+            if (omp_test_lock(glk((g-1)*NST+ist))) then
+               call pj_addq(ns2, nbk, no2, g0, gidx2, olist, XLq, slo(ist), shi(ist))
+               call omp_unset_lock(glk((g-1)*NST+ist))
+               pend(k) = pend(npend) ; npend = npend - 1
+               nacq = nacq + 1
+            else
+               k = k + 1
+            endif
+         enddo
+         if (nacq .eq. 0 .and. npend .gt. 0) then
+            ist = pend(1)
+            call omp_set_lock(glk((g-1)*NST+ist))
+            call pj_addq(ns2, nbk, no2, g0, gidx2, olist, XLq, slo(ist), shi(ist))
+            call omp_unset_lock(glk((g-1)*NST+ist))
+            pend(1) = pend(npend) ; npend = npend - 1
+         endif
+      enddo
+      if (tq_on) tq_wait = tq_wait + (omp_get_wtime() - tq0)
    enddo
 enddo
 !$omp end do
-deallocate(olist,dPoc)
+deallocate(olist,dPoc,XLq,slo,shi,pend)
 deallocate(gidx,gidx2,sl,cc,wg,kv,gm,X0r,X1r,X0,X1,A0,Pl,Col,Po,dPo,Ul,Z,Yt,cfi,H,XL,sc,A1,dZ)
 !$omp end parallel
+if (tq_on) print '(A,F8.2,A,4F9.2,A,I0)', '[xc_fxc_c] wall', omp_get_wtime() - tq_tot, '  thread-s inv/grp/wait/add', &
+   tq_inv, tq_grp, tq_wait, tq_add, '  nbatch ', nbatch
 Xt = from_q(Xq)
 deallocate(Xq)
-do g = 1,ngrp
+do g = 1,ngrp*NST
    call omp_destroy_lock(glk(g))
 enddo
 deallocate(gst, glk)
@@ -2239,6 +2319,48 @@ do i = 1,no
    enddo
 enddo
 call dgemm('T','N',ng,nbk*no,ns,1.0d0,X0,ns,Ul,ns,0.0d0,Z,ng)
+if (mg) then
+   do d = 1,3
+      call dgemm('T','N',ng,nbk*no,ns,1.0d0,X1(1,d,1),3*ns,Ul,ns,0.0d0,dZ(1,1,1,d),ng)
+   enddo
+   sc(:,:,1:4) = 0.0d0
+   sc(:,:,9) = 0.0d0
+   do i = 1,no
+      do b = 1,nbk
+         do k = 1,ng
+            z1 = Z(k,b,i)
+            sc(k,b,1) = sc(k,b,1) + Po(k,i)*z1
+            sc(k,b,2) = sc(k,b,2) + dPo(k,i,1)*z1 + Po(k,i)*dZ(k,b,i,1)
+            sc(k,b,3) = sc(k,b,3) + dPo(k,i,2)*z1 + Po(k,i)*dZ(k,b,i,2)
+            sc(k,b,4) = sc(k,b,4) + dPo(k,i,3)*z1 + Po(k,i)*dZ(k,b,i,3)
+            sc(k,b,9) = sc(k,b,9) + dPo(k,i,1)*dZ(k,b,i,1) + dPo(k,i,2)*dZ(k,b,i,2) + dPo(k,i,3)*dZ(k,b,i,3)
+         enddo
+      enddo
+   enddo
+   do k = 1,ng
+      do b = 1,nbk
+         dg(1) = 2.0d0*sc(k,b,2) ; dg(2) = 2.0d0*sc(k,b,3) ; dg(3) = 2.0d0*sc(k,b,4)
+         z1 = 2.0d0*sc(k,b,1)
+         dsig = 2.0d0*(gm(1,k)*dg(1)+gm(2,k)*dg(2)+gm(3,k)*dg(3))
+         dtau = sc(k,b,9)
+         Ac = kv(1,k)*z1 + kv(2,k)*dsig + kv(5,k)*dtau
+         Bc = 2.0d0*(kv(2,k)*z1 + kv(3,k)*dsig)*gm(:,k) + 2.0d0*kv(4,k)*dg + 2.0d0*kv(6,k)*dtau*gm(:,k)
+         Tc = kv(5,k)*z1 + kv(6,k)*dsig + kv(7,k)*dtau
+         sc(k,b,5) = Ac ; sc(k,b,6) = Bc(1) ; sc(k,b,7) = Bc(2) ; sc(k,b,8) = Bc(3) ; sc(k,b,9) = 0.5d0*Tc
+      enddo
+   enddo
+   do i = 1,no
+      do b = 1,nbk
+         do k = 1,ng
+            cfi(k,b,i) = sc(k,b,5)*Po(k,i) + sc(k,b,6)*dPo(k,i,1) + sc(k,b,7)*dPo(k,i,2) + sc(k,b,8)*dPo(k,i,3)
+         enddo
+      enddo
+   enddo
+   call mg_fill_e(ng, nbk, no, Po, dPo, sc, dZ)
+   call dgemm('N','N',ns,nbk*no,ng,1.0d0,X0,ns,cfi,ng,0.0d0,XL,ns)
+   call dgemm('N','N',ns,nbk*no,3*ng,1.0d0,X1,ns,dZ,3*ng,1.0d0,XL,ns)
+   return
+endif
 call dgemm('N','T',ns*nbk,ng,no,1.0d0,Ul,ns*nbk,Po,ng,0.0d0,Yt,ns*nbk)
 sc(:,:,1:4) = 0.0d0
 do i = 1,no
@@ -2313,6 +2435,35 @@ if (mg) then
    enddo
 endif
 end subroutine pj_group
+
+subroutine mg_fill_e(ng, nbk, no, Po, dPo, sc, E)
+integer,intent(in) :: ng, nbk, no
+real(8),intent(in) :: Po(ng,no), dPo(ng,no,3), sc(ng,nbk,9)
+real(8),intent(out) :: E(3,ng,nbk,no)
+integer :: i, b, k
+do i = 1,no
+   do b = 1,nbk
+      do k = 1,ng
+         E(1,k,b,i) = sc(k,b,6)*Po(k,i) + sc(k,b,9)*dPo(k,i,1)
+         E(2,k,b,i) = sc(k,b,7)*Po(k,i) + sc(k,b,9)*dPo(k,i,2)
+         E(3,k,b,i) = sc(k,b,8)*Po(k,i) + sc(k,b,9)*dPo(k,i,3)
+      enddo
+   enddo
+enddo
+end subroutine mg_fill_e
+
+subroutine pj_addq(ns, nbk, no, g0, gidx, olist, XLq, i1, i2)
+integer,intent(in) :: ns, nbk, no, g0, gidx(ns), olist(no), i1, i2
+integer(16),intent(in) :: XLq(ns,nbk,no)
+integer :: m, i, b
+do i = i1,i2
+   do b = 1,nbk
+      do m = 1,ns
+         Xq(gidx(m),olist(i),g0+b-1) = Xq(gidx(m),olist(i),g0+b-1) + XLq(m,b,i)
+      enddo
+   enddo
+enddo
+end subroutine pj_addq
 
 subroutine pj_add(ns, nbk, no, g0, gidx, olist, XL)
 integer,intent(in) :: ns, nbk, no, g0, gidx(ns), olist(no)
@@ -3277,8 +3428,8 @@ call pu_spin_in(ng, ns, nbk, noa, g0, gidx, X0, X1, Po(1,1,1), dPo(1,1,1,1), La,
 call pu_spin_in(ng, ns, nbk, nob, g0, gidx, X0, X1, Po(1,1,2), dPo(1,1,1,2), Lb, &
                 WB(o(1)), WB(o(2)), WB(o(3)), WB(o(7)), WB(o(8)))
 call pu_kernel(ng, ns, nbk, X1, KV, WA(o(3)), WB(o(3)), WA(o(7)), WB(o(7)), WA(o(5)), WB(o(5)))
-call pu_spin_out(ng, ns, nbk, noa, X0, X1, Po(1,1,1), dPo(1,1,1,1), WA(o(4)), WA(o(5)), WA(o(6)), WA(o(7)))
-call pu_spin_out(ng, ns, nbk, nob, X0, X1, Po(1,1,2), dPo(1,1,1,2), WB(o(4)), WB(o(5)), WB(o(6)), WB(o(7)))
+call pu_spin_out(ng, ns, nbk, noa, X0, X1, Po(1,1,1), dPo(1,1,1,1), WA(o(4)), WA(o(5)), WA(o(6)), WA(o(7)), WA(o(8)))
+call pu_spin_out(ng, ns, nbk, nob, X0, X1, Po(1,1,2), dPo(1,1,1,2), WB(o(4)), WB(o(5)), WB(o(6)), WB(o(7)), WB(o(8)))
 end subroutine pu_group
 
 subroutine pu_spin_in(ng, ns, nbk, no, g0, gidx, X0, X1, Po, dPo, Ls, Ul, Z, Yt, sc, dZ)
@@ -3295,7 +3446,7 @@ do i = 1,no
    enddo
 enddo
 call dgemm('T','N',ng,nbk*no,ns,1.0d0,X0,ns,Ul,ns,0.0d0,Z,ng)
-call dgemm('N','T',ns*nbk,ng,no,1.0d0,Ul,ns*nbk,Po,ng,0.0d0,Yt,ns*nbk)
+if (.not. mg) call dgemm('N','T',ns*nbk,ng,no,1.0d0,Ul,ns*nbk,Po,ng,0.0d0,Yt,ns*nbk)
 sc(:,:,1:4) = 0.0d0
 do i = 1,no
    do b = 1,nbk
@@ -3318,6 +3469,7 @@ if (mg) then
          do b = 1,nbk
             do k = 1,ng
                sc(k,b,9) = sc(k,b,9) + dPo(k,i,d)*dZ(k,b,i,d)
+               sc(k,b,1+d) = sc(k,b,1+d) + Po(k,i)*dZ(k,b,i,d)
             enddo
          enddo
       enddo
@@ -3342,8 +3494,13 @@ do k = 1,ng
          cycle
       endif
       do d = 1,3
-         dga(d) = 2.0d0*(sca(k,b,1+d) + sum(X1(:,d,k)*Yta(:,b,k)))
-         dgb(d) = 2.0d0*(scb(k,b,1+d) + sum(X1(:,d,k)*Ytb(:,b,k)))
+         if (mg) then
+            dga(d) = 2.0d0*sca(k,b,1+d)
+            dgb(d) = 2.0d0*scb(k,b,1+d)
+         else
+            dga(d) = 2.0d0*(sca(k,b,1+d) + sum(X1(:,d,k)*Yta(:,b,k)))
+            dgb(d) = 2.0d0*(scb(k,b,1+d) + sum(X1(:,d,k)*Ytb(:,b,k)))
+         endif
       enddo
       dta = 0.0d0 ; dtb = 0.0d0
       if (mg) then
@@ -3357,19 +3514,21 @@ do k = 1,ng
       if (mg) then
          sca(k,b,9) = 0.5d0*w*dF(6) ; scb(k,b,9) = 0.5d0*w*dF(7)
       endif
-      do m = 1,ns
-         Ha(m,b,k) = w*(Ba(1)*X1(m,1,k) + Ba(2)*X1(m,2,k) + Ba(3)*X1(m,3,k))
-         Hb(m,b,k) = w*(Bb(1)*X1(m,1,k) + Bb(2)*X1(m,2,k) + Bb(3)*X1(m,3,k))
-      enddo
+      if (.not. mg) then
+         do m = 1,ns
+            Ha(m,b,k) = w*(Ba(1)*X1(m,1,k) + Ba(2)*X1(m,2,k) + Ba(3)*X1(m,3,k))
+            Hb(m,b,k) = w*(Bb(1)*X1(m,1,k) + Bb(2)*X1(m,2,k) + Bb(3)*X1(m,3,k))
+         enddo
+      endif
    enddo
 enddo
 end subroutine pu_kernel
 
-subroutine pu_spin_out(ng, ns, nbk, no, X0, X1, Po, dPo, cfi, H, XL, sc)
+subroutine pu_spin_out(ng, ns, nbk, no, X0, X1, Po, dPo, cfi, H, XL, sc, dZ)
 integer,intent(in) :: ng, ns, nbk, no
 real(8),intent(in) :: X0(ns,ng), X1(ns,3,ng), Po(ng,nom), dPo(ng,nom,3), sc(ng,nbk,9)
-real(8),intent(inout) :: H(ns,nbk,ng), cfi(ng,nbk,no), XL(ns,nbk,no)
-integer :: i, b, k, d
+real(8),intent(inout) :: H(ns,nbk,ng), cfi(ng,nbk,no), XL(ns,nbk,no), dZ(3,ng,nbk,no)
+integer :: i, b, k
 do i = 1,no
    do b = 1,nbk
       do k = 1,ng
@@ -3378,16 +3537,19 @@ do i = 1,no
    enddo
 enddo
 call dgemm('N','N',ns,nbk*no,ng,1.0d0,X0,ns,cfi,ng,0.0d0,XL,ns)
-call dgemm('N','N',ns*nbk,no,ng,1.0d0,H,ns*nbk,Po,ng,1.0d0,XL,ns*nbk)
 if (mg) then
-   do d = 1,3
-      do k = 1,ng
-         do b = 1,nbk
-            H(1:ns,b,k) = sc(k,b,9)*X1(1:ns,d,k)
+   do i = 1,no
+      do b = 1,nbk
+         do k = 1,ng
+            dZ(1,k,b,i) = sc(k,b,6)*Po(k,i) + sc(k,b,9)*dPo(k,i,1)
+            dZ(2,k,b,i) = sc(k,b,7)*Po(k,i) + sc(k,b,9)*dPo(k,i,2)
+            dZ(3,k,b,i) = sc(k,b,8)*Po(k,i) + sc(k,b,9)*dPo(k,i,3)
          enddo
       enddo
-      call dgemm('N','N',ns*nbk,no,ng,1.0d0,H,ns*nbk,dPo(1,1,d),ng,1.0d0,XL,ns*nbk)
    enddo
+   call dgemm('N','N',ns,nbk*no,3*ng,1.0d0,X1,ns,dZ,3*ng,1.0d0,XL,ns)
+else
+   call dgemm('N','N',ns*nbk,no,ng,1.0d0,H,ns*nbk,Po,ng,1.0d0,XL,ns*nbk)
 endif
 end subroutine pu_spin_out
 
@@ -3765,6 +3927,40 @@ call gridgen(info)
 call GTOeval(info)
 print '(A,I0,A,I0,A)', "  CPSCF XC response grid: ", nrg, " points (SCF grid ", ngrids, ")"
 end subroutine xc_resp_grid_build
+
+subroutine xc_resp_td_light(on, triplet)
+logical,intent(in) :: on, triplet
+td_light_req = on
+td_triplet_req = triplet
+end subroutine xc_resp_td_light
+
+subroutine xc_resp_grid_build_td()
+integer :: info, ig
+if (.not. xcgrid_use_theory_table) return
+call xcgrid_free_derived()
+xcgrid_td_active = .true.
+xcgrid_td_light = td_light_req .and. .not. xc_uses_tau()
+xcgrid_td_tddft = td_light_req
+xcgrid_td_triplet = td_triplet_req
+call xcgrid_theory_apply()
+call gridgen(info)
+xcgrid_td_active = .false.
+xcgrid_td_light = .false.
+xcgrid_td_tddft = .false.
+xcgrid_td_triplet = .false.
+nrg = ngrids
+if (allocated(rg_coor)) deallocate(rg_coor, rg_w)
+allocate(rg_coor(3,nrg), rg_w(nrg))
+do ig = 1,nrg
+   rg_coor(:,ig) = Grids(ig)%coor
+   rg_w(ig) = Grids(ig)%weight
+enddo
+call xcgrid_free_derived()
+call xcgrid_theory_apply()
+call gridgen(info)
+call GTOeval(info)
+print '(A,I0,A,I0,A)', "  TDDFT XC kernel grid: ", nrg, " points (SCF grid ", ngrids, ")"
+end subroutine xc_resp_grid_build_td
 
 subroutine xc_resp_grid_clear()
 nrg = 0

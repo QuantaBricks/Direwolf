@@ -8,6 +8,7 @@ use mod_cosmo_constants, only: bohr2ang
 implicit none
 
 real(8),parameter :: COSMO_DEFAULT_RADIUS_ANG = 2.00d0
+real(8),save :: cavity_h_radius_ang = 0.0d0
 integer,parameter :: N_BONDI = 54
 real(8),parameter :: bondi_radius_ang(N_BONDI) = (/ &
    1.20d0, 1.40d0, 1.82d0, 1.53d0, 1.92d0, 1.70d0, 1.55d0, 1.52d0, 1.47d0, 1.54d0, &
@@ -49,6 +50,17 @@ else
 endif
 R_bohr = R_ang * radii_scale / bohr2ang
 end function cosmo_radius_bohr
+
+function cosmo_cavity_radius_bohr(Z, radii_scale) result(R_bohr)
+integer,intent(in) :: Z
+real(8),intent(in) :: radii_scale
+real(8) :: R_bohr
+if (Z == 1 .and. cavity_h_radius_ang > 0.0d0) then
+   R_bohr = cavity_h_radius_ang * radii_scale / bohr2ang
+else
+   R_bohr = cosmo_radius_bohr(Z, radii_scale)
+endif
+end function cosmo_cavity_radius_bohr
 
 function cosmo_radius_ks_bohr(Z) result(R_bohr)
 integer,intent(in) :: Z

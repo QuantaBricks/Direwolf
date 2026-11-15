@@ -4,7 +4,7 @@
 ! Main SCF iteration driver (Fock build, DIIS, convergence check) - SCFcycle.
 
 
-subroutine SCFcycle(info,Emax,Pmax,itmax,iconv_out,econv_out,do_force)
+subroutine SCFcycle(info,Emax,Pmax,itmax,iconv_out,econv_out,do_force,hi_reconverge)
 use MOL_info
 use mod_integrals, only: integrals_build_coulomb, integrals_set_accuracy, cosx_force_hi_grid, &
                          cosx_promote_md, near_singular_overlap, cosx_set_force_kscreen, &
@@ -12,6 +12,7 @@ use mod_integrals, only: integrals_build_coulomb, integrals_set_accuracy, cosx_f
 use mod_exchange, only: HF_exchange_frac, exchange_build, cosx_enabled
 use mod_density_fitting, only: df_build_coulomb
 use mod_profile, only: prof_start, prof_stop
+use mod_meminfo, only: mem_mark
 use mod_output_format, only: set_buildmode, print_buildmode
 use mod_scf_history, only: scf_hist_reset, scf_hist_record
 use GRID_info, only: xcgrid_just_refined
@@ -25,6 +26,7 @@ INCLUDE 'parameter.h'
     integer,intent(out) :: iconv_out
     real(8),intent(out) :: econv_out
     logical,intent(in) :: do_force
+    logical,intent(in) :: hi_reconverge
     integer    :: iter,iconv
     integer    :: i,j,k,n,m,info,info_sol
     real(8)    :: E_n
@@ -39,7 +41,7 @@ INCLUDE 'parameter.h'
 
     integer    :: DIIS_MAX,diis_n
     logical    :: hi_frozen, hi_rebase, fz_phase, hi_stage_done
-    real(8)    :: Emax_eff, Pmax_eff, cosx_lo_pmax
+    real(8)    :: Emax_eff, Pmax_eff, cosx_lo_pmax, e_noise_floor
     logical    :: hi_reconv
     logical,parameter :: COSX_ALL_HI_RUN = .false., COSX_HI_RECONVERGE = .false.
     logical,parameter :: COSX_HI_FLUSH = .false., COSX_HI_FROZEN = .false.
@@ -50,9 +52,9 @@ INCLUDE 'parameter.h'
     logical    :: diis_debug
     character(len=8) :: diis_dbg_env
     character(len=32) :: diis_env
-    real(8),allocatable :: diis_Fa(:,:,:),diis_Fb(:,:,:)
-    real(4),allocatable :: diis_Pa(:,:,:),diis_Pb(:,:,:)
-    real(4),allocatable :: diis_ea(:,:,:),diis_eb(:,:,:)
+    real(8),allocatable :: diis_Fa(:,:),diis_Fb(:,:)
+    real(4),allocatable :: diis_Pa(:,:),diis_Pb(:,:)
+    real(4),allocatable :: diis_ea(:,:),diis_eb(:,:)
 
     integer(8) :: wc1,wc2,wc6,wc_rate
     logical :: soscf_enable, soscf_active, newton_enable
@@ -99,8 +101,7 @@ INCLUDE 'parameter.h'
     call soscf_reset()
 
     diis_dbg_env = ""
-    call get_environment_variable("ENGINE_DIIS_DEBUG", diis_dbg_env)
-    diis_debug = (trim(diis_dbg_env) .eq. "1")
+        diis_debug = (engine_verbose .ge. 2)
     DIIS_MAX = 10
     do i = 1, Natoms
        associate (z => atoms(i)%charge)
@@ -119,20 +120,28 @@ INCLUDE 'parameter.h'
     dE_fz = 0
     cosx_lo_pmax = 1.0d-5
     cosx_all_hi = cosx_enabled .and. COSX_ALL_HI_RUN
+    block
+       character(len=8) :: eh
+       integer :: ehs
+       call get_environment_variable("ENGINE_COSX_ALLHI", eh, status=ehs)
+       if (ehs .eq. 0 .and. trim(eh) .eq. "1") cosx_all_hi = cosx_enabled
+       call get_environment_variable("ENGINE_COSX_COMP", eh, status=ehs)
+       if (cosx_enabled .and. ehs .eq. 0 .and. trim(eh) .eq. "2") hi_stage_done = .true.
+    end block
     if (cosx_all_hi) then
        cosx_force_hi_grid = .true.
        hi_stage_done = .true.
        cosx_all_hi_force = do_force
        if (do_force) call cosx_set_force_kscreen(.true.)
     endif
-    hi_reconv = COSX_HI_RECONVERGE
+    hi_reconv = COSX_HI_RECONVERGE .or. hi_reconverge
     hi_frozen = COSX_HI_FROZEN
-    allocate(diis_Fa(nconts,nconts,DIIS_MAX))
-    allocate(diis_ea(nconts,nconts,DIIS_MAX))
-    allocate(diis_Pa(nconts,nconts,DIIS_MAX))
-    allocate(diis_Fb(nconts,nconts,DIIS_MAX))
-    allocate(diis_eb(nconts,nconts,DIIS_MAX))
-    allocate(diis_Pb(nconts,nconts,DIIS_MAX))
+    allocate(diis_Fa(nconts*(nconts+1)/2,DIIS_MAX))
+    allocate(diis_ea(nconts*(nconts+1)/2,DIIS_MAX))
+    allocate(diis_Pa(nconts*(nconts+1)/2,DIIS_MAX))
+    allocate(diis_Fb(nconts*(nconts+1)/2,DIIS_MAX))
+    allocate(diis_eb(nconts*(nconts+1)/2,DIIS_MAX))
+    allocate(diis_Pb(nconts*(nconts+1)/2,DIIS_MAX))
 
     if (.not. engine_quiet) &
        print *,"cycle     Density_change     E_change(Hartree)  Total Energy(Hartree)   Exc(Hartree)  Diag.(s)  DFT(s)  Total(s)"
@@ -187,52 +196,51 @@ INCLUDE 'parameter.h'
                                      DIIS_MAX, diis_n, diis_Fa, diis_Fb, diis_Pa, diis_Pb, &
                                      diis_ea, diis_eb, diis_debug, diis_active)
               call prof_stop("diis_extrapolate")
+              call mem_mark("SCF cycle after the DIIS extrapolation", engine_verbose)
            endif
            call prof_start("diag")
            call solHFR_KS(info_sol, Prms, near_singular_overlap)
            call prof_stop("diag")
+           call mem_mark("SCF cycle after the diagonalisation", engine_verbose)
         endif
         call system_clock(wc2)
 
         call prof_start("density_build")
         allocate(Pa_n(nconts,nconts))
-        allocate(Pb_n(nconts,nconts))
-        Pa_n = 0
-        Pb_n = 0
-        do i = 1,nconts
-           do j = i,nconts
-              do k = 1,n_alpha
-                 Pa_n(i,j) = C_a(i,k)*C_a(j,k) + Pa_n(i,j)
-              enddo
-                 Pa_n(j,i) = Pa_n(i,j)
-           enddo
-        enddo
-        if (multi .eq.1) then
-           Pb_n = Pa_n
+        if (multi .eq. 1) then
+           allocate(Pb_n(0,0))
         else
-        do i = 1,nconts
-           do j = i,nconts
-              do k = 1,n_beta
-                 Pb_n(i,j) = C_b(i,k)*C_b(j,k) + Pb_n(i,j)
-              enddo
-                 Pb_n(j,i) = Pb_n(i,j)
-           enddo
-        enddo
-
+           allocate(Pb_n(nconts,nconts))
         endif
+        call density_from_orbitals(C_a, n_alpha, Pa_n)
+        if (multi .ne. 1) call density_from_orbitals(C_b, n_beta, Pb_n)
         call prof_stop("density_build")
     if (.not. diis_active .and. .not. soscf_active .and. iter .gt. 1) then
        Pa_n = Pa_n*0.5 + Pa*0.5
-       Pb_n = Pb_n*0.5 + Pb*0.5
+       if (multi .ne. 1) Pb_n = Pb_n*0.5 + Pb*0.5
     endif
-    allocate(Pa_old(nconts,nconts),Pb_old(nconts,nconts))
+    allocate(Pa_old(nconts,nconts))
+    if (multi .eq. 1) then
+       allocate(Pb_old(0,0))
+    else
+       allocate(Pb_old(nconts,nconts))
+    endif
     Pa_old = Pa
-    Pb_old = Pb
+    if (multi .ne. 1) Pb_old = Pb
     Pa = Pa_n
-    Pb = Pb_n
+    if (multi .eq. 1) then
+       Pb = Pa_n
+    else
+       Pb = Pb_n
+    endif
     Fa = 0
     Fb = 0
-        call scf_build_fock(Pa_n, Pb_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+        if (multi .eq. 1) then
+           call scf_build_fock(Pa_n, Pa_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+        else
+           call scf_build_fock(Pa_n, Pb_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+        endif
+        call mem_mark("SCF cycle after the Fock build", engine_verbose)
         if (fz_phase) then
            Fa = Fa + dFa_fz
            if (multi .ne. 1) Fb = Fb + dFb_fz
@@ -262,7 +270,11 @@ INCLUDE 'parameter.h'
            end block
         endif
         allocate(Pc(nconts,nconts))
-        Pc = (Pa_n+Pb_n)-(Pa_old+Pb_old)
+        if (multi .eq. 1) then
+           Pc = (Pa_n+Pa_n)-(Pa_old+Pa_old)
+        else
+           Pc = (Pa_n+Pb_n)-(Pa_old+Pb_old)
+        endif
         deallocate(Pa_old,Pb_old)
 
         Prms = 0
@@ -280,6 +292,10 @@ INCLUDE 'parameter.h'
                   iter,Prms,(E_n+E_rep)-E,E_n+E_rep,Exc, &
                   real(wc2-wc1,8)/wc_rate, dft_dt, real(wc6-wc1,8)/wc_rate
            call flush(6)
+        elseif (engine_verbose >= 2) then
+           write(*,"(2X,'[scf] iter ',I3,'  E = ',F18.9,'  dE = ',ES10.3,'  dP = ',ES10.3,'  t = ',F7.1,' s')") &
+                  iter, E_n+E_rep, (E_n+E_rep)-E, Prms, real(wc6-wc1,8)/wc_rate
+           call flush(6)
         endif
         call scf_hist_record(iter, Prms, (E_n+E_rep)-E, E_n+E_rep, Exc, &
                               real(wc2-wc1,8)/wc_rate, dft_dt, real(wc6-wc1,8)/wc_rate)
@@ -289,11 +305,13 @@ INCLUDE 'parameter.h'
         if (soscf_active .and. (E_n+E_rep-E) .gt. 1.0d-6) call soscf_reset()
         Emax_eff = Emax
         Pmax_eff = Pmax
-        if (cosx_enabled .and. do_force .and. hi_reconv .and. .not. hi_stage_done .and. &
+        if (cosx_enabled .and. (do_force .or. hi_reconverge) .and. hi_reconv .and. .not. hi_stage_done .and. &
             .not. cosx_force_hi_grid .and. .not. fz_phase .and. cosx_lo_pmax .gt. 0.0d0) then
            Pmax_eff = max(Pmax, cosx_lo_pmax)
            Emax_eff = max(Emax, 1.0d-2*cosx_lo_pmax)
         endif
+        e_noise_floor = 0.0d0
+        Emax_eff = max(Emax_eff, e_noise_floor)
         if (econv_out.le.Emax_eff .and. Prms.le.Pmax_eff) then
              if (.not. engine_quiet) &
                 print '("Convergence: dE=",ES10.3," Hartree, dP=",ES10.3)',E_n+E_rep-E,Prms
@@ -306,7 +324,11 @@ INCLUDE 'parameter.h'
                dFa_hi = -Fa
                dFb_hi = -Fb
                incr_since_full = incr_full_period
-               call scf_build_fock(Pa_n, Pb_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+               if (multi .eq. 1) then
+                  call scf_build_fock(Pa_n, Pa_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+               else
+                  call scf_build_fock(Pa_n, Pb_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+               endif
                dFa_hi = dFa_hi + Fa
                dFb_hi = dFb_hi + Fb
                call diis_shift_history(nconts, multi, dFa_hi, dFb_hi, S, X, diis_n, DIIS_MAX, &
@@ -314,7 +336,11 @@ INCLUDE 'parameter.h'
                deallocate(dFa_hi,dFb_hi,dFa_fz,dFb_fz)
                E = E_n+E_rep
                Pa = Pa_n
-               Pb = Pb_n
+               if (multi .eq. 1) then
+                  Pb = Pa_n
+               else
+                  Pb = Pb_n
+               endif
                deallocate(Pa_n)
                deallocate(Pb_n)
                iter = iter + 1
@@ -323,20 +349,24 @@ INCLUDE 'parameter.h'
             if (cosx_enabled .and. .not. hi_stage_done .and. .not. cosx_force_hi_grid) then
                cosx_force_hi_grid = .true.
                if (do_force) call cosx_set_force_kscreen(.true.)
-               hi_rebase = do_force .and. hi_reconv .and. diis_n .gt. 0 .and. .not. COSX_HI_FLUSH
+               hi_rebase = (do_force .or. hi_reconverge) .and. hi_reconv .and. diis_n .gt. 0 .and. .not. COSX_HI_FLUSH
                if (hi_rebase) then
                   allocate(dFa_hi(nconts,nconts),dFb_hi(nconts,nconts))
                   dFa_hi = -Fa
                   dFb_hi = -Fb
                endif
                E_lo_conv = E_n
-               call scf_build_fock(Pa_n, Pb_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+               if (multi .eq. 1) then
+                  call scf_build_fock(Pa_n, Pa_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+               else
+                  call scf_build_fock(Pa_n, Pb_n, diis_debug, iter, Prms, Exc, E_n, dft_dt, do_force)
+               endif
                if (hi_rebase) then
                   dFa_hi = dFa_hi + Fa
                   dFb_hi = dFb_hi + Fb
                endif
                if (.not. hi_reconv) goto 7711
-               if (do_force) then
+               if (do_force .or. hi_reconverge) then
                   if (hi_rebase) then
                      call diis_shift_history(nconts, multi, dFa_hi, dFb_hi, S, X, diis_n, DIIS_MAX, &
                                              diis_Fa, diis_Fb, diis_Pa, diis_Pb, diis_ea, diis_eb)
@@ -355,7 +385,11 @@ INCLUDE 'parameter.h'
                   endif
                   E = E_n+E_rep
                   Pa = Pa_n
-                  Pb = Pb_n
+                  if (multi .eq. 1) then
+                     Pb = Pa_n
+                  else
+                     Pb = Pb_n
+                  endif
                   deallocate(Pa_n)
                   deallocate(Pb_n)
                   iter = iter + 1
@@ -366,7 +400,11 @@ INCLUDE 'parameter.h'
             if (stab_mode .gt. 0 .and. stab_rounds .lt. 3) then
                stab_rounds = stab_rounds + 1
                Pa = Pa_n
-               Pb = Pb_n
+               if (multi .eq. 1) then
+                  Pb = Pa_n
+               else
+                  Pb = Pb_n
+               endif
                call newton_cg_step(C_a, C_b, eLev_a, eLev_b, n_alpha, n_beta, Prms, 1.0d30, 0.5d0, 12, &
                                    stab_took, stab_mode, stab_lam)
                if (stab_took) then
@@ -383,7 +421,11 @@ INCLUDE 'parameter.h'
             iconv = 1
             E = E_n+E_rep
             Pa = Pa_n
-            Pb = Pb_n
+            if (multi .eq. 1) then
+               Pb = Pa_n
+            else
+               Pb = Pb_n
+            endif
             deallocate(Pa_n)
             deallocate(Pb_n)
             if (xc_uses_vv10() .and. engine_vv10_nonself) then
@@ -395,7 +437,11 @@ INCLUDE 'parameter.h'
 
         E = E_n+E_rep
         Pa = Pa_n
-        Pb = Pb_n
+        if (multi .eq. 1) then
+           Pb = Pa_n
+        else
+           Pb = Pb_n
+        endif
         deallocate(Pa_n)
         deallocate(Pb_n)
         iter = iter +1
@@ -418,3 +464,31 @@ INCLUDE 'parameter.h'
     iconv_out = iconv
 
 end subroutine
+
+subroutine density_from_orbitals(C, nocc, P)
+use MOL_info, only: nconts
+use omp_lib, only: omp_get_max_threads
+implicit none
+interface
+   subroutine openblas_set_num_threads(num_threads) bind(c, name="openblas_set_num_threads")
+   use iso_c_binding, only: c_int
+   integer(c_int),value :: num_threads
+   end subroutine openblas_set_num_threads
+end interface
+real(8),intent(in) :: C(nconts,nconts)
+integer,intent(in) :: nocc
+real(8),intent(out) :: P(nconts,nconts)
+integer :: i, j
+P = 0.0d0
+if (nocc .le. 0) return
+call openblas_set_num_threads(omp_get_max_threads())
+call dsyrk('U', 'N', nconts, nocc, 1.0d0, C, nconts, 0.0d0, P, nconts)
+call openblas_set_num_threads(1)
+!$omp parallel do private(i, j) schedule(static)
+do j = 1,nconts
+   do i = j+1,nconts
+      P(i,j) = P(j,i)
+   enddo
+enddo
+!$omp end parallel do
+end subroutine density_from_orbitals

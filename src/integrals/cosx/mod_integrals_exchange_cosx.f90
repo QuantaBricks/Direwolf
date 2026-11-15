@@ -48,6 +48,7 @@ logical,save :: cosx_hi_treutler = .false.
 integer,save :: cosx_nBases_cached = -1
 real(8),save :: cosx_blkrad_max = 1.0d30
 real(8),save :: cosx_kscreen = 1.0d-7
+real(8),save :: cosx_fuse_omega = 0.0d0, cosx_fuse_c = 0.0d0
 real(8),save :: cosx_kscreen_base = 1.0d-7
 real(8),save :: cosx_kscreen_force = 1.0d-9
 real(8),save :: cosx_kscreen_incr = 1.0d-9
@@ -70,11 +71,22 @@ real(8),allocatable,save,target :: cosx_QfullT_lo(:,:), cosx_QfullT_md(:,:), cos
 integer,save :: cosx_npts_lo = 0, cosx_npts_md = 0, cosx_npts_hi = 0
 integer,allocatable,save,target :: cosx_atom_hi(:)
 real(8),allocatable,save,target :: cosx_Snum_lu_hi(:,:)
-integer,allocatable,save :: cosx_ipiv_hi(:)
+integer,allocatable,save,target :: cosx_ipiv_hi(:)
 logical,save :: cosx_Snum_lu_ready = .false.
 integer,allocatable,save,target :: cosx_blkptr_lo(:), cosx_blkidx_lo(:)
 integer,allocatable,save,target :: cosx_blkptr_md(:), cosx_blkidx_md(:)
 integer,allocatable,save,target :: cosx_blkptr_hi(:), cosx_blkidx_hi(:)
+real(8),allocatable,save,target :: cosx_coor_td(:,:), cosx_w_td(:), cosx_Qfull_td(:,:), cosx_QfullT_td(:,:)
+real(8),allocatable,save,target :: cosx_blkcen_td(:,:), cosx_blkrad_td(:)
+integer,allocatable,save,target :: cosx_blkptr_td(:), cosx_blkidx_td(:), cosx_blkstart_td(:)
+integer,save :: cosx_npts_td = 0, cosx_nblk_td = 0
+integer,allocatable,save,target :: cosx_atom_td(:), cosx_ipiv_td(:)
+real(8),allocatable,save,target :: cosx_Snum_lu_td(:,:)
+real(8),allocatable,save,target :: cosx_coor_gx(:,:), cosx_w_gx(:), cosx_Qfull_gx(:,:), cosx_QfullT_gx(:,:)
+real(8),allocatable,save,target :: cosx_blkcen_gx(:,:), cosx_blkrad_gx(:), cosx_Snum_lu_gx(:,:)
+integer,allocatable,save,target :: cosx_blkptr_gx(:), cosx_blkidx_gx(:), cosx_blkstart_gx(:), cosx_atom_gx(:), cosx_ipiv_gx(:)
+integer,save :: cosx_npts_gx = 0, cosx_nblk_gx = 0
+character(len=2),save :: cosx_force_grid = 'hi'
 integer,allocatable,save,target :: cosx_blkstart_lo(:), cosx_blkstart_md(:), cosx_blkstart_hi(:)
 integer,save :: cosx_nblk_lo = 0, cosx_nblk_md = 0, cosx_nblk_hi = 0
 real(8),allocatable,save,target :: cosx_blkcen_lo(:,:), cosx_blkrad_lo(:)
@@ -129,6 +141,12 @@ logical,save :: cosx_G_hi_valid_lr = .false.
 logical,save :: cosx_need_force_hi = .false.
 
 contains
+
+module subroutine integrals_cosx_lr_fuse(omega, c)
+real(8),intent(in) :: omega, c
+cosx_fuse_omega = omega
+cosx_fuse_c = c
+end subroutine integrals_cosx_lr_fuse
 
 module subroutine cosx_set_force_kscreen(on)
 implicit none
@@ -578,14 +596,24 @@ real(8),allocatable,intent(out) :: coor_out(:,:), w_out(:)
 integer,intent(out) :: npts_out
 integer,allocatable,intent(out) :: atom_of_out(:)
 integer :: nrad_atom(nAtoms), row_i, iatm, i, j, Ntemp, ii, jj, label
-integer :: atom_pts_i(nAtoms), atom_off(nAtoms), cursphpot
+integer :: atom_pts_i(nAtoms), atom_off(nAtoms), cursphpot, k_adj
 real(8) :: Rij(nAtoms,nAtoms), aij_mat(nAtoms,nAtoms), acoor(3,nAtoms)
 real(8) :: parm, ratm, radx, radr, radw, ratio, chi, uij, aij
 real(8) :: potx(974),poty(974),potz(974),potw(974)
 real(8) :: rdist(nAtoms), Pvec(nAtoms), rmiu, tmps, sij
+real(8),allocatable :: Rinv(:,:)
+integer,allocatable :: adj_start(:), adj_list(:), far_start(:), far_count(:), far_list(:)
+real(8) :: bfrac
+logical :: becke_pairs, becke_dev, gok
+integer,allocatable :: pi0(:), pj0(:), pa0(:), fs0(:), fc0(:), fl0(:)
+real(8),allocatable :: wv(:)
+integer :: kk, npr
 logical :: m3rad
 character(len=8) :: m3env
 
+becke_pairs = .false.
+call get_environment_variable("ENGINE_XC_BECKE_PAIRS", m3env)
+if (len_trim(m3env) > 0 .and. trim(m3env) /= '0') becke_pairs = .true.
 call get_environment_variable("ENGINE_COSX_RADIAL", m3env)
 m3rad = (trim(m3env) .ne. "BECKE")
 call get_environment_variable("ENGINE_COSX_WEIGHT", m3env)
@@ -650,8 +678,26 @@ do ii = 1,nAtoms
    enddo
 enddo
 
+allocate(Rinv(nAtoms,nAtoms), adj_start(nAtoms+1), adj_list(max(1, nAtoms*(nAtoms-1))), far_start(nAtoms), far_count(nAtoms), &
+         far_list(1))
+Rinv = 0.0d0
+do ii = 1,nAtoms
+   adj_start(ii) = 1 + (ii-1)*(nAtoms-1)
+   k_adj = adj_start(ii)
+   do jj = 1,nAtoms
+      if (jj .eq. ii) cycle
+      Rinv(ii,jj) = 1.0d0/Rij(ii,jj)
+      adj_list(k_adj) = jj
+      k_adj = k_adj + 1
+   enddo
+enddo
+adj_start(nAtoms+1) = 1 + nAtoms*(nAtoms-1)
+far_start = 1
+far_count = 0
+far_list = 0
+becke_dev = .false.
 !$omp parallel do default(shared) private(iatm,parm,ratm,i,cursphpot,potx,poty,potz,potw,Ntemp) &
-!$omp&   private(radx,radr,radw,ratio,j,label,ii,jj,rdist,Pvec,rmiu,tmps,sij) schedule(dynamic)
+!$omp&   private(radx,radr,radw,ratio,j,label,ii,jj,rdist,Pvec,rmiu,tmps,sij,bfrac) schedule(dynamic)
 do iatm = 1,nAtoms
    parm = covrad(atoms(iatm)%charge)/2*ans2bohr
    ratm = covrad(atoms(iatm)%charge)*ans2bohr
@@ -670,9 +716,19 @@ do iatm = 1,nAtoms
          coor_out(2,label) = radr*poty(j) + acoor(2,iatm)
          coor_out(3,label) = radr*potz(j) + acoor(3,iatm)
          atom_of_out(label) = iatm
+         if (becke_dev) then
+            w_out(label) = radw*potw(j)
+            cycle
+         endif
          do ii = 1,nAtoms
             rdist(ii) = dsqrt(sum((coor_out(:,label) - acoor(:,ii))**2))
          enddo
+         if (.not. becke_pairs) then
+            call becke_point_fraction(nAtoms, rdist, Rij, Rinv, aij_mat, iatm, adj_start, adj_list, far_start, far_count, &
+                                      far_list, 1.0d30, bfrac)
+            w_out(label) = radw*potw(j)*bfrac
+            cycle
+         endif
          Pvec = 1.0d0
          do ii = 1,nAtoms-1
             do jj = ii+1,nAtoms
@@ -691,6 +747,40 @@ do iatm = 1,nAtoms
    enddo
 enddo
 !$omp end parallel do
+
+if (becke_dev) then
+   npr = nAtoms*(nAtoms-1)/2
+   allocate(pi0(max(1,npr)), pj0(max(1,npr)), pa0(npts_out), fs0(nAtoms), fc0(nAtoms), fl0(1), wv(npts_out))
+   kk = 0
+   do ii = 1,nAtoms-1
+      do jj = ii+1,nAtoms
+         kk = kk + 1
+         pi0(kk) = ii - 1
+         pj0(kk) = jj - 1
+      enddo
+   enddo
+   pa0 = atom_of_out - 1
+   fs0 = 0
+   fc0 = 0
+   fl0 = 0
+   wv = w_out
+   gok = .false.
+   if (gok) then
+      w_out = wv
+   else
+      !$omp parallel do default(shared) private(label, ii, rdist, bfrac) schedule(dynamic, 256)
+      do label = 1,npts_out
+         do ii = 1,nAtoms
+            rdist(ii) = dsqrt(sum((coor_out(:,label) - acoor(:,ii))**2))
+         enddo
+         call becke_point_fraction(nAtoms, rdist, Rij, Rinv, aij_mat, atom_of_out(label), adj_start, adj_list, far_start, &
+                                   far_count, far_list, 1.0d30, bfrac)
+         w_out(label) = w_out(label)*bfrac
+      enddo
+      !$omp end parallel do
+   endif
+   deallocate(pi0, pj0, pa0, fs0, fc0, fl0, wv)
+endif
 
 end subroutine cosx_build_grid_distprune
 
@@ -774,13 +864,58 @@ integer(c_int) :: ret
 ret = c_malloc_trim(0_c_int)
 end subroutine cosx_malloc_trim
 
+subroutine cosx_build_td_grid(nConts)
+integer,intent(in) :: nConts
+integer,parameter :: TD_BLK_PTS = 64
+if (allocated(cosx_coor_td)) return
+call cosx_build_one_grid(nConts, 14, 50, cosx_coor_td, cosx_w_td, cosx_npts_td, cosx_Qfull_td, &
+                          cosx_blkptr_td, cosx_blkidx_td, cosx_blkcen_td, cosx_blkrad_td, &
+                          cosx_QfullT_td, cosx_blkstart_td, cosx_nblk_td, intacc_eps=3.067d0, &
+                          per_atom_period_scale=cosx_peratom_lomd, atom_of_out=cosx_atom_td, &
+                          lu_out=cosx_Snum_lu_td, ipiv_out=cosx_ipiv_td, blk_pts=TD_BLK_PTS)
+print '(A,I0,A,I0)', " COSX TDDFT response grid points: ", cosx_npts_td, " blocks ", cosx_nblk_td
+end subroutine cosx_build_td_grid
+
+subroutine cosx_free_td_grid()
+if (allocated(cosx_coor_td)) deallocate(cosx_coor_td, cosx_w_td, cosx_Qfull_td)
+if (allocated(cosx_QfullT_td)) deallocate(cosx_QfullT_td)
+if (allocated(cosx_blkptr_td)) deallocate(cosx_blkptr_td, cosx_blkidx_td)
+if (allocated(cosx_blkcen_td)) deallocate(cosx_blkcen_td, cosx_blkrad_td)
+if (allocated(cosx_blkstart_td)) deallocate(cosx_blkstart_td)
+if (allocated(cosx_atom_td)) deallocate(cosx_atom_td)
+if (allocated(cosx_Snum_lu_td)) deallocate(cosx_Snum_lu_td)
+if (allocated(cosx_ipiv_td)) deallocate(cosx_ipiv_td)
+cosx_npts_td = 0 ; cosx_nblk_td = 0
+if (allocated(cosx_coor_gx)) deallocate(cosx_coor_gx, cosx_w_gx, cosx_Qfull_gx)
+if (allocated(cosx_QfullT_gx)) deallocate(cosx_QfullT_gx)
+if (allocated(cosx_blkptr_gx)) deallocate(cosx_blkptr_gx, cosx_blkidx_gx)
+if (allocated(cosx_blkcen_gx)) deallocate(cosx_blkcen_gx, cosx_blkrad_gx)
+if (allocated(cosx_blkstart_gx)) deallocate(cosx_blkstart_gx)
+if (allocated(cosx_atom_gx)) deallocate(cosx_atom_gx)
+if (allocated(cosx_Snum_lu_gx)) deallocate(cosx_Snum_lu_gx)
+if (allocated(cosx_ipiv_gx)) deallocate(cosx_ipiv_gx)
+cosx_npts_gx = 0 ; cosx_nblk_gx = 0
+end subroutine cosx_free_td_grid
+
+subroutine cosx_build_gx_grid(nConts, eps, nsph)
+integer,intent(in) :: nConts, nsph
+real(8),intent(in) :: eps
+if (allocated(cosx_coor_gx)) return
+call cosx_build_one_grid(nConts, 14, nsph, cosx_coor_gx, cosx_w_gx, cosx_npts_gx, cosx_Qfull_gx, &
+                          cosx_blkptr_gx, cosx_blkidx_gx, cosx_blkcen_gx, cosx_blkrad_gx, &
+                          cosx_QfullT_gx, cosx_blkstart_gx, cosx_nblk_gx, intacc_eps=eps, &
+                          per_atom_period_scale=.true., atom_of_out=cosx_atom_gx, &
+                          lu_out=cosx_Snum_lu_gx, ipiv_out=cosx_ipiv_gx)
+print '(A,I0)', " COSX TDDFT gradient grid points: ", cosx_npts_gx
+end subroutine cosx_build_gx_grid
+
 subroutine cosx_build_one_grid(nConts, nrad, nsph, coor_out, w_out, npts_out, Qfull_out, &
                                 blkptr_out, blkidx_out, blkcen_out, blkrad_out, &
                                 QfullT_out, blkstart_out, nblk_out, per_atom_period_scale, intacc_eps, &
-                                atom_of_out, lu_out, ipiv_out)
+                                atom_of_out, lu_out, ipiv_out, blk_pts)
 use MOL_info, only: S, engine_verbose
 use GRID_info, only: gridgen_nlc_atom_of
-use omp_lib, only: omp_get_thread_num, omp_get_num_threads
+use omp_lib, only: omp_get_thread_num, omp_get_num_threads, omp_get_wtime
 implicit none
 integer,intent(in) :: nConts, nrad, nsph
 real(8),allocatable,intent(out) :: coor_out(:,:), w_out(:)
@@ -794,6 +929,7 @@ integer,allocatable,intent(out) :: blkstart_out(:)
 integer,intent(out) :: nblk_out
 logical,optional,intent(in) :: per_atom_period_scale
 real(8),optional,intent(in) :: intacc_eps
+integer,optional,intent(in) :: blk_pts
 real(8),allocatable,optional,intent(out) :: lu_out(:,:)
 integer,allocatable,optional,intent(out) :: ipiv_out(:)
 integer :: ib, nblocks, bstart, nb, g, si, kk
@@ -804,11 +940,13 @@ integer :: info
 real(8) :: blk_cen(3), blk_rad, dist
 integer :: nnz, idx
 real(8) :: bbmin(3), bbmax(3), cand_min(3), cand_max(3), halfdiag
-integer :: ip, cur_start, cur_n
+integer :: ip, cur_start, cur_n, bcap
 logical,save :: cosx_distprune = .true.
 logical,save :: cosx_distprune_checked = .false.
 character(len=8) :: cosx_distprune_env
 
+real(8) :: t_og0, t_og1, t_og2
+logical :: snum_ext
 cosx_grid_treutler = .false.
 if (.not. cosx_distprune_checked) then
    cosx_distprune_checked = .true.
@@ -818,6 +956,7 @@ if (.not. cosx_distprune_checked) then
       print *,"COSX: using distance-ratio angular pruning (isolated, COSX-only)"
 endif
 
+t_og0 = omp_get_wtime()
 block
    integer,allocatable :: atom_of_local(:)
    if (cosx_distprune .and. present(intacc_eps)) then
@@ -832,7 +971,10 @@ block
    call cosx_sort_grid_morton(npts_out, coor_out, w_out, atom_of_local)
    call move_alloc(atom_of_local, atom_of_out)
 end block
+t_og1 = omp_get_wtime()
 
+bcap = BATCH
+if (present(blk_pts)) bcap = max(1, min(BATCH, blk_pts))
 allocate(blkstart_out(0:npts_out))
 nblk_out = 0
 cur_start = 1
@@ -842,7 +984,7 @@ do ip = 2,npts_out
    cand_min = min(bbmin, coor_out(:,ip))
    cand_max = max(bbmax, coor_out(:,ip))
    halfdiag = 0.5d0*sqrt(sum((cand_max-cand_min)**2))
-   if (cur_n .ge. BATCH .or. halfdiag .gt. cosx_blkrad_max) then
+   if (cur_n .ge. bcap .or. halfdiag .gt. cosx_blkrad_max) then
       blkstart_out(nblk_out) = cur_start - 1
       nblk_out = nblk_out + 1
       cur_start = ip
@@ -900,6 +1042,8 @@ endif
 allocate(S_num(nConts,nConts))
 S_num = 0.0d0
 nblocks = nblk_out
+snum_ext = .false.
+if (snum_ext) nblocks = 0
 !$omp parallel default(shared) private(ib,bstart,nb,g,si,coor_batch,w_batch,Xb,Xbs,val1_dummy,kk) &
 !$omp&   private(S_num_local)
 allocate(S_num_local(nConts,nConts))
@@ -943,6 +1087,7 @@ end block
 deallocate(S_num_local)
 !$omp end parallel
 
+t_og2 = omp_get_wtime()
 allocate(Qfull_out(nConts,nConts))
 Qfull_out = S(1:nConts,1:nConts)
 allocate(ipiv(nConts))
@@ -970,6 +1115,8 @@ deallocate(S_num, ipiv)
 
 allocate(QfullT_out(nConts,nConts))
 QfullT_out = transpose(Qfull_out)
+if (engine_verbose .ge. 2) print '(A,I8,3F9.2)', " COSX grid build: points, grid gen, S_num, solve (s):", &
+      npts_out, t_og1-t_og0, t_og2-t_og1, omp_get_wtime()-t_og2
 
 end subroutine cosx_build_one_grid
 

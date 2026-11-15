@@ -1,6 +1,8 @@
 ! Copyright (c) 2026 QuantaBricks
 ! SPDX-License-Identifier: AGPL-3.0-or-later
 
+! Integral setup: basis-set reading, overlap/core Hamiltonian, and the choice of the two-electron integral storage mode.
+
 submodule (mod_integrals) core_impl
 implicit none
 contains
@@ -21,6 +23,9 @@ INCLUDE 'parameter.h'
     character  :: base_temp*30,basis_char*30
     character(len=200) :: bpath
     integer    :: base_ios
+    character(len=200) :: bl_path
+    character(len=128),allocatable :: bl(:)
+    integer :: nbl, lp, lp0
     real(8)    :: sum_tmp
     integer :: shls(4)
     real(8),allocatable :: buf1e(:,:), buf2e(:,:,:,:),buf1eV(:,:),buf1eT(:,:)
@@ -58,17 +63,23 @@ INCLUDE 'parameter.h'
                    '" found (atom ', i, ') - check baselabel/basis for a typo.'
           stop 1
        endif
-       open (unit = 201, file = trim(bpath))
-       do while(atoms(i)%base /= base_temp)
-            read(201,*,iostat=base_ios) base_temp
-            if (base_ios /= 0) then
-               print *, 'Error: no data/bases block "', trim(atoms(i)%base), &
-                        '" found (atom ', i, ') - check baselabel/basis for a typo.'
-               stop 1
-            endif
+       if (.not. allocated(bl) .or. trim(bpath) /= trim(bl_path)) call load_basis_lines(bpath)
+       lp = 0
+       do k = 1,nbl
+          if (first_token(bl(k)) == trim(atoms(i)%base)) then
+             lp = k + 1
+             exit
+          endif
        enddo
+       if (lp == 0) then
+          print *, 'Error: no data/bases block "', trim(atoms(i)%base), &
+                   '" found (atom ', i, ') - check baselabel/basis for a typo.'
+          stop 1
+       endif
+       lp0 = lp
        do while(.True.)
-           read(201,*), basis_char,basis_char
+           read(bl(lp),*) basis_char,basis_char
+           lp = lp + 1
            if(basis_char == "END") exit
            if(basis_char == "s") atoms(i)%nsShell = atoms(i)%nsShell+1
            if(basis_char == "p") atoms(i)%npShell = atoms(i)%npShell+1
@@ -76,17 +87,8 @@ INCLUDE 'parameter.h'
            if(basis_char == "f") atoms(i)%nfShell = atoms(i)%nfShell+1
            if(basis_char == "g") atoms(i)%ngShell = atoms(i)%ngShell+1
        enddo
-       rewind(201)
+       lp = lp0
        base_temp =""
-
-       do while(atoms(i)%base /= base_temp)
-            read(201,*,iostat=base_ios) base_temp
-            if (base_ios /= 0) then
-               print *, 'Error: no data/bases block "', trim(atoms(i)%base), &
-                        '" found (atom ', i, ') - check baselabel/basis for a typo.'
-               stop 1
-            endif
-       enddo
 
        numShell = atoms(i)%nsShell + atoms(i)%npShell + atoms(i)%ndShell + atoms(i)%nfShell + atoms(i)%ngShell
        nBases = nBases + numShell
@@ -98,7 +100,8 @@ INCLUDE 'parameter.h'
        atoms(i)%nshell = numShell
        allocate(atoms(i)%shell(numShell))
        do j = 1,numShell
-          Read(201,*),numGauss,basis_char
+          read(bl(lp),*) numGauss,basis_char
+          lp = lp + 1
           atoms(i)%shell(j)%nGauss = numGauss
           if (basis_char == "s") atoms(i)%shell(j)%angMoment = 0
           if (basis_char == "p") atoms(i)%shell(j)%angMoment = 1
@@ -108,10 +111,10 @@ INCLUDE 'parameter.h'
           allocate(atoms(i)%shell(j)%exponents(numGauss))
           allocate(atoms(i)%shell(j)%contrCoeff(numGauss))
           do k = 1,numGauss
-             Read(201,*),atoms(i)%shell(j)%exponents(k),atoms(i)%shell(j)%contrCoeff(k)
+             read(bl(lp),*) atoms(i)%shell(j)%exponents(k),atoms(i)%shell(j)%contrCoeff(k)
+             lp = lp + 1
           enddo
        enddo
-       close(201)
     enddo
 
     allocate(atm(6,nAtoms))
@@ -461,9 +464,6 @@ n = 0
 do i = 0,nBases-1
    n = max(n, cgto_engine(i,bas))
 enddo
-allocate(buf1e(n,n))
-allocate(buf1eT(n,n))
-allocate(buf1eV(n,n))
 block
    real(8),allocatable :: buf1eECP(:,:)
    integer :: dims_arr(2)
@@ -471,7 +471,11 @@ block
    real(8) :: r_i(3), r_j(3), r2_min
    logical :: ecp_pair_relevant
    real(8),parameter :: ECP_SKIP_R2 = 144.0d0
+!$omp parallel private(i,j,di,dj,shls,buf1e,buf1eT,buf1eV,buf1eECP,dims_arr,iatm_of,jatm_of,iecp) &
+!$omp&   private(r_i,r_j,r2_min,ecp_pair_relevant)
+   allocate(buf1e(n,n), buf1eT(n,n), buf1eV(n,n))
    if (necpbas > 0) allocate(buf1eECP(n,n))
+!$omp do schedule(dynamic)
    do i = 0,nBases-1
       do j = i,nBases-1
          shls(1)=i
@@ -512,11 +516,11 @@ block
          endif
       enddo
    enddo
+!$omp end do
    if (allocated(buf1eECP)) deallocate(buf1eECP)
+   deallocate(buf1e, buf1eT, buf1eV)
+!$omp end parallel
 end block
-deallocate(buf1e)
-deallocate(buf1eT)
-deallocate(buf1eV)
 
     LWORK = 1 + 6*nconts + nconts**2
 
@@ -527,7 +531,20 @@ deallocate(buf1eV)
     allocate (X(nconts,nconts))
     S_temp = S
     S_X = 0
-    call DSYEV('V','U',nconts,S_temp,nconts,S_e,WORK,LWORK,INFO)
+    block
+       use omp_lib, only: omp_get_max_threads
+       real(8) :: wq(1)
+       integer :: iwq(1), lw, liw
+       real(8),allocatable :: wd(:)
+       integer,allocatable :: iwd(:)
+       call DSYEVD('V','U',nconts,S_temp,nconts,S_e,wq,-1,iwq,-1,INFO)
+       lw = int(wq(1)) ; liw = iwq(1)
+       allocate(wd(lw), iwd(liw))
+       call openblas_set_num_threads(omp_get_max_threads())
+       call DSYEVD('V','U',nconts,S_temp,nconts,S_e,wd,lw,iwd,liw,INFO)
+       call openblas_set_num_threads(1)
+       deallocate(wd, iwd)
+    end block
     do i = 1,nconts
         if (S_e(i) .gt. X_EVAL_FLOOR*S_e(nconts)) then
             S_X(i,i) = S_e(i)**(-(1.0)/2)
@@ -538,7 +555,18 @@ deallocate(buf1eV)
             near_singular_overlap = .true.
         endif
     enddo
-    X = MATMUL(S_temp,MATMUL(S_X,TRANSPOSE(S_temp)))
+    block
+       use omp_lib, only: omp_get_max_threads
+       real(8),allocatable :: Us(:,:)
+       allocate(Us(nconts,nconts))
+       do i = 1,nconts
+          Us(:,i) = S_temp(:,i)*S_X(i,i)
+       enddo
+       call openblas_set_num_threads(omp_get_max_threads())
+       call dgemm('N','T',nconts,nconts,nconts,1.0d0,Us,nconts,S_temp,nconts,0.0d0,X,nconts)
+       call openblas_set_num_threads(1)
+       deallocate(Us)
+    end block
     deallocate (S_e)
     deallocate (S_temp)
     deallocate (S_X)
@@ -681,6 +709,39 @@ endif
         enddo
      enddo
 
+contains
+
+subroutine load_basis_lines(path)
+character(len=*),intent(in) :: path
+character(len=128) :: line
+integer :: u, ios, n
+if (allocated(bl)) deallocate(bl)
+open(newunit=u, file=trim(path), status='old', action='read')
+n = 0
+do
+   read(u,'(A)',iostat=ios) line
+   if (ios /= 0) exit
+   n = n + 1
+enddo
+allocate(bl(n))
+rewind(u)
+do n = 1,size(bl)
+   read(u,'(A)') bl(n)
+enddo
+close(u)
+nbl = size(bl)
+bl_path = path
+end subroutine load_basis_lines
+
+function first_token(line) result(tok)
+character(len=*),intent(in) :: line
+character(len=len(line)) :: tok
+integer :: e
+tok = adjustl(line)
+e = index(tok, ' ')
+if (e > 0) tok(e:) = ' '
+end function first_token
+
 end subroutine integrals_init
 
 module subroutine ensure_int2e_optimizer()
@@ -748,6 +809,7 @@ module subroutine compute_schwarz_bounds()
     integer :: si,sj,di,dj,shls(4),p,q,offi,offj,ii,num
     real(8),allocatable :: buf2e(:,:,:,:)
     real(8) :: bound
+    integer,allocatable :: soff(:)
 
     call ensure_int2e_optimizer()
     allocate(schwarz_bound(0:nBases-1,0:nBases-1))
@@ -766,20 +828,19 @@ module subroutine compute_schwarz_bounds()
        enddo
        num = num + di
     enddo
+    allocate(soff(0:nBases-1))
+    num = 0
     do si = 0,nBases-1
+       soff(si) = num
+       num = num + cgto_engine(si,bas)
+    enddo
+!$omp parallel do private(si,sj,di,dj,offi,offj,shls,buf2e,bound,p,q) schedule(dynamic)
+    do si = nBases-1,0,-1
        di = cgto_engine(si,bas)
-       num = 0
-       do ii = 0,si-1
-          num = num + cgto_engine(ii,bas)
-       enddo
-       offi = num
+       offi = soff(si)
        do sj = 0,si
           dj = cgto_engine(sj,bas)
-          num = 0
-          do ii = 0,sj-1
-             num = num + cgto_engine(ii,bas)
-          enddo
-          offj = num
+          offj = soff(sj)
           shls(1) = si; shls(2) = sj; shls(3) = si; shls(4) = sj
           allocate(buf2e(di,dj,di,dj))
           call twoe_engine(buf2e, shls, atm, size(atm,2), bas, nBases, env, int2e_opt)
@@ -795,6 +856,8 @@ module subroutine compute_schwarz_bounds()
           schwarz_bound(sj,si) = bound
        enddo
     enddo
+!$omp end parallel do
+    deallocate(soff)
 end subroutine compute_schwarz_bounds
 
 module subroutine build_significant_pairs()

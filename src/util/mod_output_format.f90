@@ -7,7 +7,7 @@ module mod_output_format
 implicit none
 private
 public :: out_path, set_output_path, finalize_output_file, normalize_output_file
-public :: set_buildmode, print_buildmode
+public :: set_buildmode, print_buildmode, print_distance_matrix
 
 character(len=512), save :: out_path = ''
 character(len=64), save :: bm_j = '', bm_k = '', bm_vxc = ''
@@ -186,5 +186,30 @@ enddo
 close(u)
 deallocate(lines)
 end subroutine normalize_output_file
+
+subroutine print_distance_matrix(u, n, sym, coord_ang)
+integer, intent(in) :: u, n
+character(len=2), intent(in) :: sym(n)
+real(8), intent(in) :: coord_ang(3,n)
+integer, parameter :: NCOL = 10
+integer :: i, j, j0, j1
+character(len=8) :: lab
+character(len=16) :: cl(NCOL)
+write(u,'(A)') '[DISTMAT]  interatomic distances (Angstrom)'
+do j0 = 1, n, NCOL
+   j1 = min(j0+NCOL-1, n)
+   cl = ''
+   do j = j0, j1
+      write(lab,'(A,I0)') trim(sym(j)), j
+      cl(j-j0+1) = adjustr(lab)
+   enddo
+   write(u,'(A9,10A9)') '', (trim(adjustl(cl(j-j0+1))) , j = j0, j1)
+   do i = j0, n
+      write(u,'(A,I0,T10,10F9.4)') trim(sym(i)), i, &
+           (sqrt(sum((coord_ang(:,i)-coord_ang(:,j))**2)), j = j0, min(j1, i))
+   enddo
+enddo
+write(u,'(A)') '[DISTMATEND]'
+end subroutine print_distance_matrix
 
 end module mod_output_format

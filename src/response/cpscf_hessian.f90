@@ -17,6 +17,8 @@ real(8),intent(in) :: Pa(nConts,nConts), Pb(nConts,nConts), HF_exchange_frac
 real(8),intent(out) :: d2E_2e(3,natoms,3,natoms)
 real(8),intent(in),optional :: Cocc_a(:,:), Cocc_b(:,:)
 real(8),allocatable :: d2a(:,:,:,:), d2b(:,:,:,:)
+logical :: lrfuse
+real(8) :: omh, lrc
 cpscf_cosx_kx_proj = .false.
 if (cosx_enabled .and. HF_exchange_frac > 0.0d0) then
    if (engine_use_df_j .and. (cpscf_match_scf_requested() .or. cpscf_rij_mode(HF_exchange_frac))) then
@@ -28,20 +30,33 @@ if (cosx_enabled .and. HF_exchange_frac > 0.0d0) then
    if (allocated(cpscf_cosx_kxa)) deallocate(cpscf_cosx_kxa, cpscf_cosx_kxb)
    allocate(cpscf_cosx_kxa(nConts,nConts,3,natoms), cpscf_cosx_kxb(nConts,nConts,3,natoms))
    cpscf_cosx_kx_proj = present(Cocc_a)
+   lrfuse = .false.
+   if (RS_omega > 0.0d0) then
+      block
+         character(len=8) :: e
+         call get_environment_variable("ENGINE_COSX_DUAL", e)
+         lrfuse = (trim(e) .ne. "0")
+      end block
+   endif
+   if (lrfuse) then
+      omh = -RS_omega ; lrc = RS_beta/HF_exchange_frac
+   else
+      omh = 0.0d0 ; lrc = 0.0d0
+   endif
    if (cpscf_cosx_kx_proj) then
       cpscf_cosx_kxa = 0.0d0 ; cpscf_cosx_kxb = 0.0d0
       if (present(Cocc_b)) then
-         call cosx_hess_exchange(nConts, natoms, Pa, Pb, 0.0d0, d2a, d2b, cpscf_cosx_kxa, cpscf_cosx_kxb, &
-                                 Cocca=Cocc_a, Coccb=Cocc_b)
+         call cosx_hess_exchange(nConts, natoms, Pa, Pb, omh, d2a, d2b, cpscf_cosx_kxa, cpscf_cosx_kxb, &
+                                 Cocca=Cocc_a, Coccb=Cocc_b, lrcoef=lrc)
       else
-         call cosx_hess_exchange(nConts, natoms, Pa, Pb, 0.0d0, d2a, d2b, cpscf_cosx_kxa, cpscf_cosx_kxb, &
-                                 Cocca=Cocc_a, Coccb=Cocc_a)
+         call cosx_hess_exchange(nConts, natoms, Pa, Pb, omh, d2a, d2b, cpscf_cosx_kxa, cpscf_cosx_kxb, &
+                                 Cocca=Cocc_a, Coccb=Cocc_a, lrcoef=lrc)
       endif
    else
-      call cosx_hess_exchange(nConts, natoms, Pa, Pb, 0.0d0, d2a, d2b, cpscf_cosx_kxa, cpscf_cosx_kxb)
+      call cosx_hess_exchange(nConts, natoms, Pa, Pb, omh, d2a, d2b, cpscf_cosx_kxa, cpscf_cosx_kxb, lrcoef=lrc)
    endif
    d2E_2e = d2E_2e + 2.0d0*HF_exchange_frac*(d2a + d2b)
-   if (RS_omega > 0.0d0) then
+   if (RS_omega > 0.0d0 .and. .not. lrfuse) then
       block
          real(8),allocatable :: d2al(:,:,:,:), d2bl(:,:,:,:), kal(:,:,:,:), kbl(:,:,:,:)
          allocate(d2al(3,natoms,3,natoms), d2bl(3,natoms,3,natoms))
@@ -89,7 +104,8 @@ cpscf_cosx_kx_proj = .false.
 if (allocated(cpscf_dfj_jx)) deallocate(cpscf_dfj_jx)
 end subroutine cpscf_hess_2e_release
 
-module subroutine cphf_debug_hessian_row(nConts, natoms, nocc, C_a, eLev_a, Pa, Pb, HF_exchange_frac, iatom, ic)
+module subroutine cphf_debug_hessian_row(nConts, natoms, nocc, C_a, eLev_a, Pa, Pb, HF_exchange_frac, iatom, ic &
+                                         )
 use MOL_info, only: atoms
 use mod_integrals, only: integrals_hessian_1e_shell, integrals_hessian_2e_direct, &
                          integrals_hessian_2e_df_j, engine_use_df_j, df_store_release, df_store_restore
@@ -261,7 +277,7 @@ endif
 
 block
    use mod_hessian_freq, only: hessian_write_full, hessian_frequencies, hess_classical, freq_unit, freq_base
-   real(8),allocatable :: freq_cm(:), disp_m(:,:)
+   real(8),allocatable :: freq_cm(:), disp_m(:,:), dmu_m(:,:)
    integer :: nfreq, uh, kk, nzero_m
    character(264) :: hessfile
    if (allocated(hess_classical)) then
@@ -288,9 +304,10 @@ block
       write(freq_unit,'(A,I5,F14.4)') '   mode', kk, freq_cm(kk)
    enddo
    write(freq_unit,'(A)') ' [FREQUENCIESEND]'
+   allocate(dmu_m(3,3*natoms))
    call hess_ir_report(nConts, natoms, znum, ecpce, coor_bohr, ao_atom, Ptot, 4.0d0, &
-                       C_a, nocc, U_full, C_a, 0, U_full, freq_cm, disp_m, nzero_m)
-   deallocate(freq_cm, disp_m)
+                       C_a, nocc, U_full, C_a, 0, U_full, freq_cm, disp_m, nzero_m, dmu_m)
+   deallocate(freq_cm, disp_m, dmu_m)
 end block
 
 deallocate(U_full,h1_MO_all,s1_MO_all,mo_e1_all,d2E_resp,ao_atom,Ptot,Wtot,znum,ecpce,coor_bohr)
@@ -298,7 +315,8 @@ deallocate(d2E_1e,d2E_2e,d2Enn,d2E_tot)
 end subroutine cphf_debug_hessian_row
 
 module subroutine cphf_debug_hessian_row_uhf(nConts, natoms, nocc_a, nocc_b, C_a, eLev_a, C_b, eLev_b, &
-                                       Pa, Pb, HF_exchange_frac, iatom, ic)
+                                       Pa, Pb, HF_exchange_frac, iatom, ic &
+                                       )
 use MOL_info, only: atoms
 use mod_cosmo_hessian, only: cosmo_hess_release
 use mod_integrals, only: integrals_hessian_1e_shell, integrals_hessian_2e_direct, &
@@ -478,7 +496,7 @@ endif
 
 block
    use mod_hessian_freq, only: hessian_write_full, hessian_frequencies, hess_classical, freq_unit, freq_base
-   real(8),allocatable :: freq_cm(:), disp_m(:,:)
+   real(8),allocatable :: freq_cm(:), disp_m(:,:), dmu_m(:,:)
    integer :: nfreq, uh, kk, nzero_m
    character(264) :: hessfile
    if (allocated(hess_classical)) then
@@ -505,9 +523,10 @@ block
       write(freq_unit,'(A,I5,F14.4)') '   mode', kk, freq_cm(kk)
    enddo
    write(freq_unit,'(A)') ' [FREQUENCIESEND]'
+   allocate(dmu_m(3,3*natoms))
    call hess_ir_report(nConts, natoms, znum, ecpce, coor_bohr, ao_atom, Ptot, 2.0d0, &
-                       C_a, nocc_a, U_full_a, C_b, nocc_b, U_full_b, freq_cm, disp_m, nzero_m)
-   deallocate(freq_cm, disp_m)
+                       C_a, nocc_a, U_full_a, C_b, nocc_b, U_full_b, freq_cm, disp_m, nzero_m, dmu_m)
+   deallocate(freq_cm, disp_m, dmu_m)
 end block
 
 deallocate(U_full_a,U_full_b,h1_MO_all_a,s1_MO_all_a,mo_e1_all_a)
@@ -516,7 +535,8 @@ deallocate(d2E_1e,d2E_2e,d2Enn,d2E_tot)
 end subroutine cphf_debug_hessian_row_uhf
 
 subroutine hess_ir_report(nConts, natoms, znum, ecpce, coor_bohr, ao_atom, Ptot, fac, &
-                          C1, nocc1, U1, C2, nocc2, U2, freq_cm, disp, nzero)
+                          C1, nocc1, U1, C2, nocc2, U2, freq_cm, disp, nzero, dmu_out)
+use mod_engine_report, only: report_dipole_deriv
 use mod_integrals, only: integrals_dipole_ao, integrals_dipole_pulay
 use mod_hessian_freq, only: print_normal_modes, ir_intensities, print_ir, write_molden_freq, write_modes_csv, freq_unit, &
                            print_thermo, freq_mult, freq_base, freq_thermo
@@ -526,6 +546,7 @@ real(8),intent(in) :: coor_bohr(3,natoms), Ptot(nConts,nConts), fac
 real(8),intent(in) :: C1(nConts,nConts), C2(nConts,nConts)
 real(8),intent(in) :: U1(nConts,max(nocc1,1),3,natoms), U2(nConts,max(nocc2,1),3,natoms)
 real(8),intent(in) :: freq_cm(3*natoms), disp(3*natoms,3*natoms)
+real(8),intent(out) :: dmu_out(3,3*natoms)
 real(8),allocatable :: R(:,:,:), M(:,:), RC(:,:), dmu(:,:), inten(:), redmass(:)
 real(8) :: dpul(3,3,natoms)
 integer :: c, x, a, i, ispin, nocc, i_at
@@ -571,6 +592,7 @@ n3: block
       enddo
       deallocate(M, RC)
    enddo
+   dmu_out = dmu
    call ir_intensities(natoms, dmu, disp, inten)
    call print_normal_modes(natoms, znum, freq_cm, disp, nzero, redmass, inten)
    call print_ir(n3, nzero, freq_cm, inten)
@@ -583,6 +605,7 @@ n3: block
       enddo
    enddo
    write(freq_unit,'(A)') ' [DIPOLEDERIVEND]'
+   call report_dipole_deriv(dmu, natoms)
    call write_molden_freq(trim(freq_base)//'.freq.molden', natoms, znum, coor_bohr, freq_cm, disp, &
                           redmass, nzero, inten)
    call write_modes_csv(trim(freq_base)//'.modes.csv', natoms, znum, freq_cm, disp, redmass, nzero, inten)

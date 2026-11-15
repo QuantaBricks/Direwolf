@@ -4,6 +4,7 @@
 ! 1-electron analytic second-derivative (Hessian) integral kernels.
 
 submodule (mod_integrals) hessian_impl
+use MOL_info, only: engine_verbose
 implicit none
 contains
 
@@ -300,8 +301,7 @@ integer,parameter :: PERMMAP(4,8) = reshape( (/ &
    1,2,3,4,   2,1,3,4,   1,2,4,3,   2,1,4,3,  &
    3,4,1,2,   4,3,1,2,   3,4,2,1,   4,3,2,1 /), (/4,8/) )
 
-call get_environment_variable("ENGINE_HESS2E_TIMING", tm_env)
-tm_on = (trim(tm_env) .eq. "1")
+tm_on = (engine_verbose .ge. 2)
 tm0 = omp_get_wtime()
 allocate(ao_offset(0:nBases-1), shell_dim(0:nBases-1))
 num_off = 0
@@ -530,8 +530,7 @@ tm_par = omp_get_wtime() - tm0 ; tm0 = omp_get_wtime()
 block
    character(32) :: envval
    integer :: envstat
-   call get_environment_variable("ENGINE_HESSIAN_2E_TIMING", envval, status=envstat)
-   if (envstat .eq. 0) then
+   if (engine_verbose .ge. 2) then
       print *, '   2e-direct split (thread-summed s): kernels=', t_kern, ' coef=', t_coef, ' contract=', t_contr
       print *, '   2e-direct quadruples kept =', nquad_done, '  kernel calls =', nquad_done*6
    endif

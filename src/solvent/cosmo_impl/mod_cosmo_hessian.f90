@@ -43,13 +43,13 @@ else
 endif
 nt = 0
 do k = 1,d_n
-   if (d_ta(k)*bohr2ang*bohr2ang >= 1.0d-4) nt = nt+1
+   if (d_ta(k)*bohr2ang*bohr2ang >= cosmo_min_tess_area_ang2()) nt = nt+1
 enddo
 allocate(tc(3,nt), ta(nt), Js(3,3*natoms,nt), Ja(3*natoms,nt))
 Js = 0.0d0 ; Ja = 0.0d0
 kk = 0
 do k = 1,d_n
-   if (d_ta(k)*bohr2ang*bohr2ang < 1.0d-4) cycle
+   if (d_ta(k)*bohr2ang*bohr2ang < cosmo_min_tess_area_ang2()) cycle
    kk = kk+1
    tc(:,kk) = d_tc(:,k)
    ta(kk) = d_ta(k)
