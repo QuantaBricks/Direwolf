@@ -1,0 +1,16 @@
+&molecule
+ functional   = 'PBE0'
+ baselabel    = 'def2-svp'
+ J            = 'RI'
+ K            = 'cosx'
+ runtype      = 'opt'
+ tddft_nroots = 5
+ cube         = 'den, esp'
+&end
+
+&atoms
+C    0.0000    0.0000    0.0000
+O    0.0000    0.0000    1.2500
+H    0.0000    0.9800   -0.6000
+H    0.0000   -0.9800   -0.6000
+&end

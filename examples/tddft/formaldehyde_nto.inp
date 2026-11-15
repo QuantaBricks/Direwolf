@@ -1,0 +1,19 @@
+&molecule
+ functional = 'PBE0'
+ baselabel  = 'def2svp'
+ J = 'exact'
+ K = 'exact'
+&end
+
+&atoms
+C    0.000000    0.000000   -0.600000
+O    0.000000    0.000000    0.600000
+H    0.000000    0.940000   -1.180000
+H    0.000000   -0.940000   -1.180000
+&end
+
+! natural transition orbitals of states 1 and 3: formaldehyde_nto.s1.nto.molden, .s3.nto.molden
+&tddft
+ nroots = 3
+ nto = '1, 3'
+&end

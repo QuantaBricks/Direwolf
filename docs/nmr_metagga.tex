@@ -1,0 +1,298 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.3cm]{geometry}
+\usepackage{amsmath,amssymb,bm,booktabs,listings,xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\lstset{basicstyle=\ttfamily\small,breaklines=true,frame=single,columns=fullflexible,keepspaces=true}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\rr}{\bm{r}}
+\newcommand{\grad}{\bm{\nabla}}
+\newcommand{\jp}{\bm{j}_p}
+\newcommand{\vt}{v_\tau}
+\newcommand{\ttil}{\tilde\tau}
+\newcommand{\Dm}{\mathbf{D}}
+\newcommand{\ci}{\mathrm{i}}
+\title{GIAO NMR shieldings with meta-GGA functionals:\\derivation and implementation in Direwolf}
+\author{}
+\date{}
+\emergencystretch=4em
+\pagestyle{plain}
+\begin{document}
+\maketitle
+\tableofcontents
+
+\begin{abstract}
+\noindent
+This note derives the magnetic shielding tensor of a Kohn--Sham determinant with a meta-GGA exchange--correlation functional in London (GIAO) orbitals, and describes how the result is coded (\texttt{src/nmr/mod\_nmr.f90}). The functional is made gauge invariant with the kinetic-energy density $\ttil=\tau_p-|\jp|^2/(2\rho)$. We show that the field then enters only through the orbitals, that all first-order densities except the paramagnetic current vanish, and that the exchange--correlation functional contributes to the shielding only through (i) a source term in the first-order Fock matrix and (ii) a current kernel in the coupled-perturbed equations; it has no explicit term for the nuclear moment. Atomic units are used throughout; $\alpha$ is the fine-structure constant.
+\end{abstract}
+
+%=====================================================================
+\part{Derivation}
+%=====================================================================
+
+\section{Setting and conventions}
+
+The shielding of nucleus $N$ is the mixed second derivative of the electronic energy with respect to the external field $\bm B$ and the nuclear magnetic moment $\bm m$,
+\begin{equation}
+\sigma^N_{ab}=\left.\frac{\partial^2E}{\partial B_a\,\partial m_b}\right|_{B=m=0}\times10^{6}\ \text{(ppm)} .
+\end{equation}
+The one-electron Hamiltonian is $\tfrac12(\bm p+\bm A)^2+v$ with $\bm A=\bm A_B+\bm A_m$,
+\begin{equation}
+\bm A_B(\rr)=\tfrac12\bm B\times(\rr-\bm O),\qquad
+\bm A_m(\rr)=\alpha^2\,\frac{\bm m\times(\rr-\bm R_N)}{|\rr-\bm R_N|^3},
+\end{equation}
+with gauge origin $\bm O$. Orbitals are $\varphi_i=\sum_\nu c_{\nu i}\psi_\nu$ with a complex Hermitian density matrix
+\begin{equation}
+D_{\mu\nu}=\sum_i c^*_{\mu i}c_{\nu i},\qquad
+\rho(\rr)=\sum_{\mu\nu}D_{\mu\nu}\psi_\mu^*\psi_\nu .
+\label{eq:rho}
+\end{equation}
+With this convention the Fock matrix is $F_{\mu\nu}=\partial E/\partial D_{\mu\nu}$ and $\sum_\nu F_{\mu\nu}c_{\nu i}=\varepsilon_i\sum_\nu S_{\mu\nu}c_{\nu i}$.
+To first order in the perturbations $X\in\{B_a,m_b\}$ the density matrix is $\Dm=\Dm^0+\ci\sum_X X\,\bm d^X$ with $\Dm^0$ real symmetric and $\bm d^X$ real \emph{antisymmetric} (the first-order matrices are purely imaginary).
+
+\section{The functional in a magnetic field}
+
+\subsection{Gauge-invariant ingredients}
+Under a gauge transformation $\varphi\to e^{\ci\Lambda}\varphi$, $\bm A\to\bm A-\grad\Lambda$ the following are invariant:
+\begin{align}
+\rho&=\sum_i|\varphi_i|^2,\qquad \sigma=|\grad\rho|^2,\\
+\tau_{\rm cov}&=\tfrac12\sum_i|(-\ci\grad+\bm A)\varphi_i|^2,\qquad
+\bm j=\sum_i\mathrm{Re}\,[\varphi_i^*(-\ci\grad+\bm A)\varphi_i] .
+\end{align}
+With $\tau_p=\tfrac12\sum_i|\grad\varphi_i|^2$ and $\jp=\mathrm{Im}\sum_i\varphi_i^*\grad\varphi_i$ one finds by expanding the squares
+\begin{equation}
+\tau_{\rm cov}=\tau_p+\bm A\cdot\jp+\tfrac12A^2\rho,\qquad \bm j=\jp+\rho\bm A .
+\label{eq:cov}
+\end{equation}
+
+\subsection{The functional}
+A functional $E_{xc}[\rho,\sigma,\tau]$ defined at $B=0$ has no unique extension to a field. We require (a) gauge invariance and (b) exactness for one-electron densities, for which the iso-orbital indicator $(\tau-\tau_W)/\tau_{\rm unif}$ must vanish. For a single orbital $\varphi=\sqrt\rho\,e^{\ci\theta}$ one has $\tau_{\rm cov}=\tau_W+|\bm j|^2/(2\rho)$, so the covariant $\tau$ alone violates (b). The choice
+\begin{equation}
+\boxed{\ \ttil=\tau_{\rm cov}-\frac{|\bm j|^2}{2\rho}\ }\qquad E_{xc}=E_{xc}[\rho,\sigma,\ttil]
+\end{equation}
+satisfies both. Inserting \eqref{eq:cov},
+\begin{equation}
+\ttil=\tau_p+\bm A\cdot\jp+\tfrac12A^2\rho-\frac{|\jp+\rho\bm A|^2}{2\rho}
+=\boxed{\ \tau_p-\frac{|\jp|^2}{2\rho}\ } .
+\label{eq:tt}
+\end{equation}
+\emph{The vector potential cancels exactly}: the field enters the functional only through the orbitals $\varphi_i$. In particular $E_{xc}$ has no explicit dependence on $\bm A_m$. (The alternative $\ttil=\tau_{\rm cov}$ is also gauge invariant but is not exact for one electron; numerically it changes the oxygen shielding of water by $+4$~ppm and is not used.)
+
+\section{London orbitals and first-order quantities}
+
+Basis functions $\chi_\mu$ centred at $\bm R_\mu$ carry the London phase,
+\begin{equation}
+\psi_\mu=e^{-\ci\phi_\mu}\chi_\mu,\qquad
+\phi_\mu(\rr)=\tfrac12(\bm B\times\bm R_\mu)\cdot\rr,\qquad
+\bm a_\mu\equiv\grad\phi_\mu=\tfrac12\bm B\times\bm R_\mu ,
+\end{equation}
+so that $\grad\psi_\nu=e^{-\ci\phi_\nu}(\grad\chi_\nu-\ci\bm a_\nu\chi_\nu)$ and products carry $e^{\ci\Phi_{\mu\nu}}$ with
+\begin{equation}
+\Phi_{\mu\nu}=\phi_\mu-\phi_\nu=\tfrac12\bm B\cdot\big((\bm R_\mu-\bm R_\nu)\times\rr\big),
+\end{equation}
+which is independent of the gauge origin. $\Phi$ and $\bm d^X$ are antisymmetric in $\mu\nu$, whereas $\chi_\mu\chi_\nu$, $\grad\chi_\mu\!\cdot\!\grad\chi_\nu$ and $\Dm^0$ are symmetric.
+
+\paragraph{Vanishing first-order densities.}
+From \eqref{eq:rho}, $\rho^{(1)}=\sum_{\mu\nu}(D^0_{\mu\nu}\,\ci\Phi_{\mu\nu}+\ci d^X_{\mu\nu})\chi_\mu\chi_\nu=0$ (antisymmetric $\times$ symmetric), and the same holds for $\grad\rho$, hence $\sigma^{(1)}=0$. For
+$\tau_p=\tfrac12\sum D_{\mu\nu}e^{\ci\Phi_{\mu\nu}}(\grad\chi_\mu+\ci\bm a_\mu\chi_\mu)\!\cdot\!(\grad\chi_\nu-\ci\bm a_\nu\chi_\nu)$,
+\begin{equation}
+\tau_p^{(1)}=\tfrac{\ci}{2}\sum_{\mu\nu}D^0_{\mu\nu}\Big[\Phi_{\mu\nu}\grad\chi_\mu\!\cdot\!\grad\chi_\nu+\chi_\mu\bm a_\mu\!\cdot\!\grad\chi_\nu-\chi_\nu\bm a_\nu\!\cdot\!\grad\chi_\mu\Big]+\tfrac{\ci}2\sum d_{\mu\nu}\grad\chi_\mu\!\cdot\!\grad\chi_\nu=0 ,
+\end{equation}
+every term being antisymmetric in $\mu\nu$. The paramagnetic current $\jp=\mathrm{Im}\sum D_{\mu\nu}\psi_\mu^*\grad\psi_\nu$ does \emph{not} vanish:
+\begin{equation}
+\boxed{\ \jp^{(1)}=\sum_{\mu\nu}D^0_{\mu\nu}\Big[\Phi_{\mu\nu}\chi_\mu\grad\chi_\nu-\bm a_\nu\chi_\mu\chi_\nu\Big]+\sum_{\mu\nu}d_{\mu\nu}\chi_\mu\grad\chi_\nu\ }
+\label{eq:j1}
+\end{equation}
+The first sum is the explicit part $\bm j^{\rm ex}$ (from the London phase), the second is the orbital response $\bm J[\bm d]$ with
+$\bm J[\bm d]=\sum_{\mu\nu}d_{\mu\nu}\chi_\mu\grad\chi_\nu$. Since $\jp^{(0)}=0$ we have $\ttil^{(1)}=0$ as well.
+
+\section{Second-order energy}
+
+Expand $E_{xc}=\int f(\rho,\sigma,\ttil)$ to second order, with $v_\rho,v_\sigma,\vt$ the first derivatives at the ground state. Because $\rho^{(1)}=\sigma^{(1)}=\ttil^{(1)}=0$, the term quadratic in first-order densities ($\tfrac12f''(\cdot)^2$) vanishes identically, and
+\begin{equation}
+E^{(2)}_{xc}=\int\Big[v_\rho\rho^{(2)}+v_\sigma\sigma^{(2)}+\vt\Big(\tau_p^{(2)}-\frac{|\jp^{(1)}|^2}{2\rho}\Big)\Big].
+\label{eq:E2}
+\end{equation}
+All of $\rho,\sigma,\tau_p,\jp$ are linear in $\Dm$, hence second order in $\bm d$ occurs only in the last term. The nuclear moment enters the Kohn--Sham energy only through the one-electron operator (the PSO operator $\bm h^m$); \emph{$E_{xc}$ has no explicit $\bm m$ dependence}.
+
+\paragraph{Interchange theorem.}
+Let $\bm d^B$ be the first-order density in the field (solution of the coupled-perturbed equations of section~\ref{sec:cphf}). Then
+\begin{equation}
+\sigma_{ab}=\mathrm{Tr}\big[\Dm^0\,h^{B_am_b}\big]+\mathrm{Tr}\big[\bm d^{B_a}\,\bm h^{m_b}\big],
+\label{eq:sigma}
+\end{equation}
+where $h^{B_am_b}$ and $\bm h^{m_b}$ are the explicit second- and first-order one-electron operators (diamagnetic and PSO). The exchange--correlation functional appears in \eqref{eq:sigma} only through $\bm d^{B}$, i.e. through the equations that determine it.
+
+\section{Fock-matrix contributions}
+
+Write $F_{\mu\nu}=F^0_{\mu\nu}+\ci B\,f_{\mu\nu}+\ci\,\mathcal F[\bm d]_{\mu\nu}$ (field of unit strength along $a$); $f$ is the source and $\mathcal F$ the response. Everything below is real antisymmetric.
+
+\subsection{Density and gradient (phase) term}
+From $F^{\rho\sigma}_{\mu\nu}=\int[v_\rho\psi^*_\mu\psi_\nu+2v_\sigma\grad\rho\cdot\grad(\psi_\mu^*\psi_\nu)]$ and the phase $e^{\ci\Phi_{\mu\nu}}$,
+\begin{equation}
+f^{\rho\sigma}_{\mu\nu}=\tfrac12\sum_{bc}\varepsilon_{abc}(R_\mu-R_\nu)_b\,Q^c_{\mu\nu},\qquad
+Q^c_{\mu\nu}=\int\Big[v_\rho\,r_c\chi_\mu\chi_\nu+2v_\sigma\,\grad\rho\cdot\grad(r_c\chi_\mu\chi_\nu)\Big].
+\label{eq:frs}
+\end{equation}
+
+\subsection{Kinetic-energy-density term}
+With $\partial\tau_p/\partial D_{\mu\nu}=\tfrac12\grad\psi_\mu^*\!\cdot\!\grad\psi_\nu$ and \eqref{eq:tt}, the $\tau_p$ part of the source is the coefficient of $\ci$ in $\tfrac12\vt\,\grad\psi_\mu^*\!\cdot\!\grad\psi_\nu$:
+\begin{equation}
+f^{\tau}_{\mu\nu}=\tfrac12\int\vt\Big[(\phi_\mu-\phi_\nu)\,\grad\chi_\mu\!\cdot\!\grad\chi_\nu+\chi_\mu\,\bm a_\mu\!\cdot\!\grad\chi_\nu-\chi_\nu\,\bm a_\nu\!\cdot\!\grad\chi_\mu\Big],
+\label{eq:ftau}
+\end{equation}
+with $\phi_\mu=\tfrac12(\bm R_\mu\times\rr)_a$ and $\bm a_\mu=\tfrac12\bm e_a\times\bm R_\mu$ for unit field along $\bm e_a$.
+
+\subsection{Current term}
+The derivative of $-\vt|\jp|^2/(2\rho)$ is $-(\vt/\rho)\,\jp\cdot\partial\jp/\partial D_{\mu\nu}$. Writing $\jp=\frac1{2\ci}\sum(D_{\mu\nu}X_{\mu\nu}-D^*_{\mu\nu}X^*_{\mu\nu})$ with $\bm X_{\mu\nu}=\psi^*_\mu\grad\psi_\nu$ gives, at lowest order, $\partial\jp/\partial D_{\mu\nu}=-\tfrac{\ci}2(\chi_\mu\grad\chi_\nu-\chi_\nu\grad\chi_\mu)$. Therefore, for a given current $\bm j$ (first order), the Fock matrix is $\ci$ times
+\begin{equation}
+\mathcal G[\bm j]_{\mu\nu}=\tfrac12\int\frac{\vt}{\rho}\Big[\chi_\mu\,\bm j\!\cdot\!\grad\chi_\nu-\chi_\nu\,\bm j\!\cdot\!\grad\chi_\mu\Big] .
+\label{eq:G}
+\end{equation}
+The \emph{source} is $f^{j}=\mathcal G[\bm j^{\rm ex}]$ with $\bm j^{\rm ex}$ from \eqref{eq:j1}, the \emph{response} is $\mathcal F^{\rm cur}[\bm d]=\mathcal G[\bm J[\bm d]]$. Consistency check: $\sum_{\mu\nu}d_{\mu\nu}\mathcal G[\bm J[\bm d]]_{\mu\nu}=\int(\vt/\rho)|\bm J[\bm d]|^2$, which equals $-2E^{(2)}_{xc}$ of the last term of \eqref{eq:E2}.
+
+\subsection{Gauge invariance}
+Replacing the gauge origin $\bm O\to\bm O+\bm t$ multiplies every $\psi_\mu$ by the same factor $e^{\ci\Lambda(\rr)}$, $\Lambda=\tfrac12(\bm B\times\bm t)\cdot\rr$. Since $\tau_p\to\tau_p+\jp\cdot\grad\Lambda+\tfrac12\rho|\grad\Lambda|^2$ and $\jp\to\jp+\rho\grad\Lambda$, $\ttil=\tau_p-|\jp|^2/2\rho$ is unchanged, so the matrix $F_{\mu\nu}$ (and $f$, $\mathcal F$) is unchanged (verified numerically to $4\times10^{-15}$). A functional using $\tau_p$ alone is not invariant.
+
+\section{Coupled-perturbed equations}\label{sec:cphf}
+
+Let $u_{ai}$ be the occupied--virtual rotation, $c^{(1)}_i=\sum_a u_{ai}c_a$ with $u=\ci u_r$. The first-order density is
+\begin{equation}
+\bm d(u)=2\big(\mathbf P_r-\mathbf P_r^{T}\big)+\bm d_{oo},\quad \mathbf P_r=\mathbf C_v u_r\mathbf C_o^T,\quad \bm d_{oo}=-\tfrac12\,\Dm^0\bm S^{B}\Dm^0 ,
+\end{equation}
+where $\bm S^B$ is the (antisymmetric) field derivative of the overlap of the London orbitals and $\bm d_{oo}$ restores orthonormality. (Up to the convention of section~\ref{sec:conv} of Part II.) The equation for the field is
+\begin{equation}
+\Delta\varepsilon_{ai}\,u_{r,ai}+\Big[\mathbf C_v^T\big(\mathcal F^{\rm ex}[\bm d]+\mathcal F^{\rm cur}[\bm d]\big)\mathbf C_o\Big]_{ai}
+=-\Big[\mathbf C_v^T\big(\bm f-\varepsilon_i\bm S^B\big)\mathbf C_o\Big]_{ai},
+\label{eq:cphf}
+\end{equation}
+where $\bm f=\bm h^B+\bm G^B[\Dm^0]+\bm f^{\rho\sigma}+\bm f^{\tau}+\bm f^{j}+\mathcal F^{\rm ex}[\bm d_{oo}]+\mathcal F^{\rm cur}[\bm d_{oo}]$. The Coulomb part drops out for an antisymmetric density. For a hybrid, $\mathcal F^{\rm ex}[\bm d]=-\tfrac12\big(c_x\mathbf K[\bm d]+\beta\mathbf K^{\rm LR}[\bm d]\big)$ (up to the convention of Part~II), with $\mathbf K^{\rm LR}$ built from the integrals of $\mathrm{erf}(\omega r)/r$. Note the two kernels act with opposite signs on $\bm d$: $d\cdot\mathcal F^{\rm ex}[d]\le0$ and $d\cdot\mathcal F^{\rm cur}[d]\ge0$. The operator was positive definite in all cases tested (CG converges in a handful of iterations).
+
+\section{Assembly of the shielding}
+
+With $\bm d^{B}$ from \eqref{eq:cphf}, \eqref{eq:sigma} gives
+\begin{equation}
+\sigma^N_{ab}=\underbrace{\alpha^2\,\mathrm{Tr}\big[\Dm^0\,h^{B_a m_b}_N\big]}_{\text{diamagnetic (one-electron)}}
++\underbrace{\alpha^2\sum_{\mu\nu}d^{B_a}_{\mu\nu}\,\mathrm{PSO}^{N,b}_{\mu\nu}}_{\text{paramagnetic}}
+\quad(\times10^6).
+\end{equation}
+There is \emph{no} explicit exchange--correlation term: the meta-GGA enters through $\bm f^{\tau}$, $\bm f^{j}$ and the current kernel inside $\bm d^B$.
+
+\section{Checks}
+
+\begin{itemize}
+\item With $\vt\equiv1$ the pieces reduce to those of the kinetic-energy operator and agree with the libcint integrals (\texttt{igkin}$+\frac12$\texttt{giao\_irjxp}, \texttt{giao\_a11part}, \texttt{a01gp}, \texttt{prinvxp}) to $10^{-8}$ or better.
+\item The result is invariant under a rigid translation of the molecule (both hydrogens of water stay equal to $10^{-3}$~ppm); omitting $\bm f^{j}$ or the kernel destroys this by 0.5--4~ppm.
+\item Against an independent program (def2-SVP, same geometry, exact integrals):
+\end{itemize}
+
+\begin{center}
+\begin{tabular}{llrrr}
+\toprule
+system & functional & nucleus & this work (ppm) & reference (ppm)\\
+\midrule
+water & TPSS & O & 341.331 & 341.324\\
+ & & H & 31.993 & 31.994\\
+ & r2SCAN & O & 343.049 & 343.045\\
+ & & H & 31.719 & 31.718\\
+ & M06-2X & O & 346.041 & 346.125\\
+ & & H & 31.567 & 31.567\\
+H$_2$CO & TPSS & C & 5.640 & 5.654\\
+ & & O & $-401.680$ & $-401.663$\\
+\bottomrule
+\end{tabular}
+\end{center}
+Dropping the current terms (a common simplification) lowers the oxygen shielding of water by about 1.4~ppm.
+
+%=====================================================================
+\part{Implementation}
+%=====================================================================
+
+\section{Overview}
+
+\begin{center}
+\begin{tabular}{ll}
+\toprule
+routine & role\\
+\midrule
+\texttt{nmr\_shielding} & driver: GIAO integrals, Fock source, CPHF (PCG), shielding assembly\\
+\texttt{nmr\_xc\_giao} & $\bm f^{\rho\sigma}$ and, for meta-GGAs, $\bm f^{\tau}$, $\bm f^{j}$ on the SCF grid\\
+\texttt{nmr\_tau\_block} & one grid block of the $\tau$/current accumulators\\
+\texttt{nmr\_xc\_resp} & current kernel $\mathcal F^{\rm cur}[\bm d]$ for three densities\\
+\texttt{k\_eff} (internal) & $c_x\mathbf K+\beta\mathbf K^{\rm LR}$ plus the current kernel\\
+\texttt{integrals\_giao\_*} & libcint GIAO integrals (\texttt{mod\_integrals\_giao.f90})\\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Flow of \texttt{nmr\_shielding}: (1) $\bm S^B,\bm h^B$ from \texttt{integrals\_giao\_1e}; (2) $\bm J^B[\Dm],\bm K^B[\Dm]$ from \texttt{integrals\_giao\_jk} (exchange skipped for pure functionals; second call with $\omega$ for a range-separated hybrid); (3) $\bm d_{oo}$; (4) $\bm F^B$ = $\bm h^B+\bm J^B-\tfrac12\bm K^B+\bm V_{xc}-\tfrac12\mathbf K[\bm d_{oo}]$ with $\bm V_{xc}$ from \texttt{nmr\_xc\_giao}; (5) right-hand sides and preconditioned conjugate gradients for the three field directions; (6) for every nucleus, the PSO and diamagnetic integrals and the contraction in the last equation of Part~I.
+
+The solver is entered for pure meta-GGAs as well: the flag \texttt{has\_k} is true when $c_x\neq0$, $\beta\ne0$, or the functional is a meta-GGA. The grid is the SCF grid (\texttt{Grids}, \texttt{ngrids}); AO values and gradients come from \texttt{GTOeval\_point}, in blocks of 1024 points, OpenMP over the points of a block.
+
+\section{Sign conventions}\label{sec:conv}
+
+The code inherits libcint's sign of the London-phase operators (\texttt{igovlp} $=-\tfrac12(\bm R_\mu-\bm R_\nu)\times\rr$ matrix elements) and the exchange routines work with the real density $P=\sum c\,c^\dagger=D^T$. The mapping from the physical quantities of Part~I is:
+\begin{center}
+\begin{tabular}{lll}
+\toprule
+physical (Part I) & code & comment\\
+\midrule
+source $\bm f$ (coefficient of $\ci$) & $\bm F^B_{\rm code}=-\bm f$ & for $\bm f^{\rho\sigma},\bm f^\tau,\bm f^j$ alike\\
+rotation $u_r$ and density $\bm d$ & $\bm d_{\rm code}=-\bm d$ & $\Rightarrow$ kernel changes sign\\
+current kernel in \eqref{eq:cphf} & $-\mathcal G[\bm J[\bm d_{\rm code}]]$ & compare $-\tfrac12c_x\mathbf K[\bm d_{\rm code}]$ for exchange\\
+\bottomrule
+\end{tabular}
+\end{center}
+The code equation is
+\begin{multline}
+\Big(\Delta\varepsilon\,u-\tfrac12\mathbf C_v^T(c_x\mathbf K+\beta\mathbf K^{\rm LR})[\bm d]\mathbf C_o-\mathbf C_v^T\mathcal G[\bm J[\bm d]]\mathbf C_o\Big)_{ai}\\
+=-\Big(\mathbf C_v^T(\bm F^B_{\rm code}-\varepsilon_i\bm S^B)\mathbf C_o\Big)_{ai}.
+\end{multline}
+This mapping was fixed in a finite-B complex-arithmetic prototype that evaluates $\ttil$ and the Fock matrix directly from the complex London orbitals (see Appendix); in particular the relative sign of the kernel is the one for which the result is translation invariant and agrees with the reference.
+
+\section{\texttt{nmr\_xc\_giao}}
+
+\paragraph{Density and gradient.} For each block: $\rho=\mathrm{rowsum}\big((\Phi\Dm)\circ\Phi\big)$, $\grad\rho=2\,\mathrm{rowsum}\big((\Phi\Dm)\circ\grad\Phi\big)$, $\sigma=|\grad\rho|^2$; for meta-GGAs $\tau=\tfrac12\sum_c\mathrm{rowsum}\big((\partial_c\Phi\,\Dm)\circ\partial_c\Phi\big)$. The functional is evaluated with \texttt{xc\_eval} for the closed shell (each spin gets $\rho/2$, $\tau/2$; \texttt{xc\_eval} returns $v_\rho,v_\sigma,v_\tau$). For $\bm f^{\rho\sigma}$, $X^c_\nu=w[\tfrac12v_\rho r_c\phi_\nu+2v_\sigma r_c\,\grad\rho\!\cdot\!\grad\phi_\nu+v_\sigma\partial_c\rho\,\phi_\nu]$ and $Q^c=\Phi^TX^c+(X^c)^T\Phi$ (one \texttt{dgemm} per component). After the loop
+$V^a_{\mu\nu}=-\tfrac12\sum\varepsilon_{abc}(R_\mu-R_\nu)_bQ^c_{\mu\nu}$ (code sign of \eqref{eq:frs}).
+
+\paragraph{Meta-GGA accumulators.} \eqref{eq:ftau} and \eqref{eq:G} are reduced to a few global $n\times n$ matrices per component $c$ or direction $a$ (\texttt{nmr\_tau\_block}); $n$ is the number of AOs and $\phi^a_\mu(\rr)=\tfrac12(R_{\mu,a+1}r_{a+2}-R_{\mu,a+2}r_{a+1})$:
+\begin{align}
+H_{c}&\mathrel{+}=\Phi^T\big(w\vt\,\partial_c\Phi\big), \\
+A^a&\mathrel{+}=\sum_c\big(\tfrac12w\vt\,\phi^a\!\circ\!\partial_c\Phi\big)^T\partial_c\Phi,\\
+j^{\rm ex}_{a,c}(g)&=\sum_\mu\phi^a_{g\mu}\Big[\Phi_{g\mu}(\partial_c\Phi\,\Dm)_{g\mu}-(\Phi\Dm)_{g\mu}\partial_c\Phi_{g\mu}\Big]-\sum_\nu a^{(a)}_{\nu,c}(\Phi\Dm)_{g\nu}\Phi_{g\nu},\\
+B^a&\mathrel{+}=\Phi^T\Big(\tfrac{w\vt}{\rho}\sum_cj^{\rm ex}_{a,c}\,\partial_c\Phi\Big),
+\end{align}
+with $a^{(a)}_{\nu,c}=\tfrac12(\bm e_a\times\bm R_\nu)_c$ and the weight $w\vt/\rho$ set to zero where $\rho<10^{-12}$. The source matrix is
+\begin{equation}
+f^{a}_{\mu\nu}=(A^a-A^{aT})_{\mu\nu}+\tfrac12\sum_{c}\tfrac12\big[(\bm e_a\times\bm R_\mu)_c\,H_{c,\mu\nu}-(\bm e_a\times\bm R_\nu)_c\,H_{c,\nu\mu}\big]+\tfrac12(B^a-B^{aT})_{\mu\nu},
+\end{equation}
+and \texttt{Vxc(:,:,a) -= f}. The weights $w\vt/\rho$ are stored per grid point (module variable \texttt{wv\_store}, private to \texttt{mod\_nmr}) for the kernel.
+
+\section{\texttt{nmr\_xc\_resp} and the solver}
+
+For a set of antisymmetric densities $\bm d$ the routine returns $\mathcal G[\bm J[\bm d]]$: per block $\bm J_c=\mathrm{rowsum}\big(\Phi\circ(\partial_c\Phi\,\bm d^T)\big)$, $W_{g\nu}=(w\vt/\rho)\sum_cJ_c\,\partial_c\Phi_{g\nu}$, $B\mathrel{+}=\Phi^TW$, and at the end $\mathcal G=\tfrac12(B-B^T)$. It re-evaluates the AOs in each call (as the SCF XC build does); it is called once for $\bm d_{oo}$ and once per CG iteration (three densities at a time). In \texttt{k\_eff} the kernel enters with the factor $2$ because the caller multiplies every $\mathbf K$-like term by $-\tfrac12$ (so that $-\tfrac12\cdot2\,\mathcal G=-\mathcal G$, the sign of the table above).
+
+The operator is applied with \texttt{apply\_a}, preconditioned by $1/\Delta\varepsilon$. For pure GGAs without exchange there is no response and the solution is $u=\mathrm{rhs}/\Delta\varepsilon$ (no iterations).
+
+\section{Cost, scope, limitations}
+
+\begin{itemize}
+\item Grid work: one pass for the source (3 field directions), one for $\bm d_{oo}$, one per CG iteration. Each pass is dominated by \texttt{dgemm} on $1024\times n$ blocks.
+\item Memory: a few $n\times n\times3$ matrices plus the stored weights; the grid blocks are not kept.
+\item Supported: LDA/GGA/meta-GGA, pure, global-hybrid and range-separated hybrids (exact $J/K$ GIAO integrals, forced by \texttt{runtype = 'nmr'}). Not supported: VV10, open shell, ECP, solvent models, point charges. Sensitive functionals (M06 family) need a dense XC grid.
+\end{itemize}
+
+\section{Validation and regression}
+
+The prototype (NumPy/PySCF, scratch only) evaluates $\ttil$ with complex London orbitals at $B=\pm10^{-4}$ and differentiates numerically; it reproduces the analytic first-order matrices of the covariant $\tau$ to $2\times10^{-11}$, and is the definition used to fix signs. The regression \texttt{test/report/run\_tests.py} checks HF, PBE, CAM-B3LYP and TPSS shieldings of water.
+
+\appendix
+\section{Finite-field definition of the source}\label{app:fd}
+
+For the field $\bm B=\pm\epsilon\bm e_a$ the complex orbitals $\psi_\mu=e^{-\ci\phi_\mu}\chi_\mu$ are formed on the grid, and
+\[
+F^{\tau}_{\mu\nu}(\bm B)=\int\Big[\tfrac12\vt\,\grad\psi_\mu^*\!\cdot\!\grad\psi_\nu-\frac{\vt}{\rho}\,\jp\cdot\frac{1}{2\ci}\big(\psi_\mu^*\grad\psi_\nu-\psi_\nu\grad\psi_\mu^*\big)\Big],\quad
+\jp=\mathrm{Im}\sum D^0_{\mu\nu}\psi_\mu^*\grad\psi_\nu ,
+\]
+$f_{\mu\nu}=\big(\mathrm{Im}F(+\epsilon)-\mathrm{Im}F(-\epsilon)\big)/2\epsilon$. This is exactly \eqref{eq:ftau}$+$\eqref{eq:G} and was used to check the code's matrices and signs; setting the gauge origin to a different point leaves $F$ unchanged to $10^{-15}$.
+
+\end{document}

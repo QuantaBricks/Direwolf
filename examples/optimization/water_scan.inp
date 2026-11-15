@@ -1,0 +1,16 @@
+&molecule
+ functional = 'PBE'
+ baselabel  = '6-31g'
+ J = 'exact'
+ K = 'exact'
+&end
+
+&atoms
+O    0.0000    0.0000    0.1173
+H    0.0000    0.7572   -0.4692
+H    0.0000   -0.7572   -0.4692
+&end
+
+&opt
+ constraints = 'bond 1 2 0.90 1.30 5'
+&end
