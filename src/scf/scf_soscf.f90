@@ -213,7 +213,7 @@ deallocate(FC)
 end subroutine soscf_rotate
 
 subroutine newton_cg_step(C_a, C_b, eLev_a, eLev_b, na, nb, Prms, grad_max, trust, ncgmax, took_step, stab_mode, lam_out)
-use MOL_info, only: Pa, Pb, Fa, Fb, nconts, Multi
+use MOL_info, only: Pa, Pb, Fa, Fb, nconts, Multi, engine_verbose
 use mod_exchange, only: cosx_enabled
 use mod_integrals, only: cosx_set_response_mode, cosx_incr_stash
 implicit none
@@ -350,8 +350,9 @@ do it = 1,ncgmax
 enddo
 
 xn = sqrt(dot_product(x,x))
-print '(A,ES10.3,A,I3,A,ES10.3,A,ES10.3,A,ES10.3)', ' NEWTON gn=',gn,' ncg=',it, &
-   ' res/rn=',sqrt(dot_product(r,r))/rn,' |x|=',xn,' -g.x=',-dot_product(g,x)
+if (engine_verbose .ge. 2) &
+   print '(2X,A,ES10.3,A,I3,A,ES10.3,A,ES10.3,A,ES10.3)', 'Newton-CG step: gradient norm ',gn,'  CG iterations ',it, &
+   '  residual ',sqrt(dot_product(r,r))/rn,'  step norm ',xn,'  -g.x ',-dot_product(g,x)
 if (xn .gt. trust) x = x*(trust/xn)
 
 do s = 1,nsp

@@ -41,6 +41,7 @@ INCLUDE 'parameter.h'
 
     integer    :: DIIS_MAX,diis_n
     logical    :: hi_frozen, hi_rebase, fz_phase, hi_stage_done
+    logical    :: newton_announced
     real(8)    :: Emax_eff, Pmax_eff, cosx_lo_pmax, e_noise_floor
     logical    :: hi_reconv
     logical,parameter :: COSX_ALL_HI_RUN = .false., COSX_HI_RECONVERGE = .false.
@@ -116,6 +117,7 @@ INCLUDE 'parameter.h'
     diis_n = 0
     hi_rebase = .false.
     fz_phase = .false.
+    newton_announced = .false.
     hi_stage_done = .false.
     dE_fz = 0
     cosx_lo_pmax = 1.0d-5
@@ -167,7 +169,10 @@ INCLUDE 'parameter.h'
            call prof_stop("diag")
            if (soscf_active) then
               diis_n = 0
-              if (.not. engine_quiet) print *, "ENGINE_NEWTON: Newton-CG orbital step"
+              if (.not. engine_quiet .and. .not. newton_announced) then
+                 print "(2X,A,I3,A)", "Newton-CG orbital optimization from cycle ", iter, " (second-order SCF)"
+                 newton_announced = .true.
+              endif
            endif
         endif
         if (soscf_enable .and. iter .gt. 2 .and. .not. soscf_active) then
